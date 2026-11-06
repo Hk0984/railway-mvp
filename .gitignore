@@ -1,0 +1,6 @@
+node_modules/
+dist/
+*.local
+.npm-cache/
+artifacts/
+tests/fixtures/real/
