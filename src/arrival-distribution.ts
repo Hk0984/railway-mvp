@@ -1,11 +1,55 @@
 import type { AssignmentDemand, AssignmentConfig } from "./assignment-model";
+import { allocateVolume } from "./temporal-demand";
+export function arrivalVolumes(
+  total: number,
+  weights: number[],
+  c: AssignmentConfig,
+) {
+  if (
+    !c.integer ||
+    !["uniform", "weighted"].includes(c.arrivalModel?.timing ?? "")
+  )
+    return allocateVolume(total, weights, c.integer);
+  const sum = weights.reduce((s, w) => s + w, 0);
+  if (!sum) return weights.map(() => 0);
+  let cumulative = 0,
+    previous = 0;
+  return weights.map((w, i) => {
+    cumulative += w;
+    const end =
+        i === weights.length - 1
+          ? total
+          : Math.floor((total * cumulative) / sum + 0.5),
+      n = end - previous;
+    previous = end;
+    return n;
+  });
+}
 export interface ArrivalModel {
+  timing?: "midpoint" | "start" | "uniform" | "weighted";
+  integrationSeconds?: number;
   mode: "representative" | "minute";
   distribution: "uniform" | "front" | "back" | "custom";
   stepSeconds: number;
   weights?: number[];
 }
 export function validateArrivalModel(m: ArrivalModel) {
+  if (m.mode === "representative" && m.timing && m.timing !== "midpoint")
+    throw new Error("枠開始・積分には時刻分布モデルを選択してください");
+  if (
+    m.timing !== undefined &&
+    !["midpoint", "start", "uniform", "weighted"].includes(m.timing)
+  )
+    throw new Error("枠内時刻方式が不正です");
+  if (
+    m.integrationSeconds !== undefined &&
+    (!Number.isFinite(m.integrationSeconds) ||
+      m.integrationSeconds < 1 ||
+      m.integrationSeconds > 60)
+  )
+    throw new Error("積分刻みは1〜60秒です");
+  if (m.timing === "uniform" && m.distribution !== "uniform")
+    throw new Error("一様到着方式には一様分布を指定してください");
   if (
     !m ||
     !["representative", "minute"].includes(m.mode) ||
@@ -72,7 +116,12 @@ export function arrivalBreaks(
   c: AssignmentConfig,
 ) {
   if (c.arrivalModel?.mode !== "minute") return;
-  const step = c.arrivalModel.stepSeconds;
+  const step = ["uniform", "weighted"].includes(c.arrivalModel.timing ?? "")
+    ? Math.min(
+        c.arrivalModel.stepSeconds,
+        c.arrivalModel.integrationSeconds ?? 1,
+      )
+    : c.arrivalModel.stepSeconds;
   if ((end - start) / step > 100000)
     throw new Error(
       "到着枠が多すぎます。需要時間窓を短くするか刻みを広げてください",

@@ -1,10 +1,18 @@
 ﻿# Railway Lab — 鉄道ダイヤ／OD需要分析 MVP
 
-**MVP 0.5：複数路線・徒歩乗換の統合配分、1分単位の駅到着分布、旅客流動・感度分析・人数加重便益を追加しました。** 0.4の103件を維持し、全126件のテストが成功しました。日本語UIは全12画面です。[0.5計算仕様と制限](docs/MVP_0_5.md)、[配分仕様](docs/ASSIGNMENT.md)、[検証記録](docs/VALIDATION.md)を参照してください。
+**MVP 0.6：同時刻一括の乗車競合、枠内時刻4方式、旅客追跡・途中人数監査、シナリオ幅・比較条件の照合を追加しました。** 既存126件を含む全151件のテストが成功しました。日本語UIは全12画面です。[0.6計算仕様と制限](docs/MVP_0_6.md)、[配分仕様](docs/ASSIGNMENT.md)、[検証記録](docs/VALIDATION.md)を参照してください。
 
 TypeScript + Vite の日本語Webアプリです。サーバー・DB・外部APIを使用せず、ブラウザ内で処理します。5駅・72列車の架空鉄道を同梱し、ファイルを用意しなくても分析できます。このフォルダーの外に既存アプリの変更は行っていません。GitHubへのpush・リモート作成・公開は行っていません。
 
-## 0.5の使い方
+## 0.6の使い方
+
+「複数路線・統合配分」で架空サンプルを追加し、「0.6：競合・時刻精度・診断」を開きます。同時刻一括・FIFO・同着比例方式、枠内時刻、乗車締切、概要／全件診断を設定して保存・実行してください。全件記録ではOD・駅・列車で旅客履歴を絞り、任意時刻の人数を監査できます。診断CSV／JSONも出力できます。
+
+時刻精度4方式、11条件の仮定シナリオ幅を比較できます。秒単位の旅客到着はモデル仮定で、元の時刻表の秒を推測しません。設定幅を信頼区間とは表示しません。固定需要比較では条件差・輸送完了率・比較対象外人数と、大きなOD／駅／列車差を表示します。実測データによる実路線の精度実証は未実施です。
+
+0.5はローカルコミット `9b52aad` に保存。旧JSON・従来の配分画面は登録順の0.5互換で、新方式は統合画面で選択します。検索結果・区間人数を維持しながら停車情報の共有でメモリを削減しました。ただし大規模乗換は約23秒かかる測定条件があり、全条件で高速化したわけではありません。
+
+## 0.5の機能（維持）
 
 「複数路線・統合配分」で架空サンプルを追加すると、鉄道→徒歩→バスの配分をすぐ試せます。対象ダイヤの日区分・対応根拠、徒歩の方向・時間・追加時間・有効性、ODの発着データセット、到着分布を確認して保存・実行してください。乗換先の満員時は後続経路を再探索し、徒歩中・車内・未輸送も同じ需要として保存則を検証します。
 
@@ -136,6 +144,9 @@ railway-mvp/
     arrival-distribution.ts 到着分布・確率質量と分割境界
     network-sample.ts / network-ui.ts / network-worker.ts 架空網・統合画面・Worker
     flow-analysis.ts / validation-view.ts OD流動・最大断面寄与・人数加重便益
+    assignment-diagnostics.ts / diagnostic-ui.ts 状態台帳・集団履歴・任意時刻監査
+    result-conditions.ts / comparison-facts.ts / comparison-view.ts 条件照合・差分事実
+    precision-analysis.ts / assignment-scenarios.ts 時刻4方式・複合仮定シナリオ
     sensitivity.ts / sensitivity-worker.ts 9条件の感度分析
     main.ts        12画面のUIと状態管理
     style.css      PC/スマートフォン向けレイアウト
@@ -160,6 +171,9 @@ railway-mvp/
   tests/fixtures/real/ コピー2件・SHA-256記録（git対象外）
   scripts/inspect-oud2.mjs
   scripts/benchmark-v05.mjs / benchmark-v05-entry.ts 5・40・110駅の性能比較
+  scripts/benchmark-v06.mjs / benchmark-v06-entry.ts 0.5比較・容量徒歩ありの計測
+  tests/competition-v06.test.ts / comparison-v06.test.ts / real-v06.test.ts
+  tests/browser-v06.mjs / browser-performance-v06.mjs
   docs/FORMAT.md
   docs/ROADMAP.md
   docs/VALIDATION.md
@@ -167,6 +181,7 @@ railway-mvp/
   docs/ROUTING.md / TEMPORAL_DEMAND.md
   docs/MVP_0_4.md 過去版のモデル・CSV・仮定・制限
   docs/MVP_0_5.md 統合配分・時刻精密化・検証・便益・制限
+  docs/MVP_0_6.md 同時刻競合・時刻仮定・診断・性能・比較条件
   docs/ASSIGNMENT.md 配分仕様と過去版の記録
   vite.config.ts  検証成果物を監視対象から除外
   artifacts/       ローカル画面検証のスクリーンショット等（git対象外）
@@ -177,6 +192,6 @@ railway-mvp/
 
 0.2ではデータセットIDと駅IDの組で検索対象を識別します。旅程は列車ID・ダイヤID・乗降駅・明示着発・乗換関係を構造化して返します。TransferLinkは方向・徒歩秒数・設定根拠を持ち、UIで追加・削除できます。プロジェクトJSONに日間・時間帯需要を、**全データセットJSON**にライブラリ・徒歩連絡・各プロジェクトを保存できます。どちらも既存のJSON読込ボタンから読み込みます。ライブラリは圧縮してブラウザ内にも保存します。
 
-検索は登録された運行日内に限ります。翌日の便の自動繰り返し、路線外区間、別レコードを確定直通とする処理、運賃は未実装です。徒歩リンクは列車間の乗換に使い、徒歩を含む容量配分に対応しました。徒歩だけのOD移動は扱いません。1分枠内の中点近似、同時便の登録順による競合、大量結果の転送・描画コストが残ります。
+検索は登録された運行日内に限ります。翌日の便の自動繰り返し、路線外区間、別レコードを確定直通とする処理、運賃は未実装です。徒歩リンクは列車間の乗換に使い、徒歩を含む容量配分に対応しました。徒歩だけのOD移動は扱いません。積分セル内の中点近似、旧方式の登録順・新方式の端数タイブレーク、大量結果の転送・描画コストが残ります。
 
 検証手順と結果は [VALIDATION.md](docs/VALIDATION.md)、次の実装優先順位は [ROADMAP.md](docs/ROADMAP.md) を参照してください。

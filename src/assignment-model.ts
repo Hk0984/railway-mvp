@@ -18,6 +18,9 @@ export interface ChoiceCoefficients {
   scale: number;
 }
 export interface AssignmentConfig {
+  competition?: "legacy" | "simultaneous";
+  diagnosticMode?: "summary" | "full";
+  boardingCutoffSeconds?: number;
   arrivalModel?: ArrivalModel;
   serviceMapping?: ServiceMapping;
   capacityConstrained?: boolean;
@@ -85,6 +88,15 @@ export interface TrainLoad {
   peakOccupancy: number | null;
 }
 export interface AssignmentResult {
+  audit?: import("./assignment-diagnostics").AssignmentAudit;
+  calculationVersion?: string;
+  scenario?: unknown;
+  provenance?: {
+    capacityBasis?: unknown;
+    datasets: { datasetId: string; timetableId: string }[];
+    walks: unknown;
+    demandAssumptions: unknown;
+  };
   capacity?: CapacityOutcome;
   config: AssignmentConfig;
   input: AssignmentDemand[];
@@ -106,6 +118,7 @@ export interface AssignmentResult {
     milliseconds: number;
     warnings: string[];
     candidateJourneys?: number;
+    timings?: Record<string, number>;
   };
 }
 export function defaultAssignmentConfig(): AssignmentConfig {
@@ -152,6 +165,21 @@ export function defaultAssignmentConfig(): AssignmentConfig {
   };
 }
 export function validateAssignmentConfig(c: AssignmentConfig) {
+  if (
+    c?.competition !== undefined &&
+    !["legacy", "simultaneous"].includes(c.competition)
+  )
+    throw new Error("乗車競合方式が不正です");
+  if (
+    c?.diagnosticMode !== undefined &&
+    !["summary", "full"].includes(c.diagnosticMode)
+  )
+    throw new Error("診断記録方式が不正です");
+  if (
+    c?.boardingCutoffSeconds !== undefined &&
+    (!Number.isFinite(c.boardingCutoffSeconds) || c.boardingCutoffSeconds < 0)
+  )
+    throw new Error("乗車締切秒が不正です");
   if (c?.arrivalModel) validateArrivalModel(c.arrivalModel);
   if (c?.serviceMapping) validateServiceMapping(c.serviceMapping);
   const nonnegative = (n: number) => Number.isFinite(n) && n >= 0;

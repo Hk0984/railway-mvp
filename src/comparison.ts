@@ -3,6 +3,8 @@ import { cachedRoutingIndex } from "./routing-cache";
 import { assignDemand } from "./assignment";
 import { analyzeService } from "./service";
 import { classificationCounts } from "./classification";
+import { comparisonConditions } from "./result-conditions";
+import { comparisonFacts } from "./comparison-facts";
 import { passengerFlows, flowSummary, compareBenefits } from "./flow-analysis";
 import type {
   AssignmentDemand,
@@ -17,6 +19,8 @@ export interface ComparisonRow {
   unit: string;
 }
 export interface ComparisonResult {
+  consistency?: ReturnType<typeof comparisonConditions>;
+  facts?: ReturnType<typeof comparisonFacts>;
   benefits?: ReturnType<typeof compareBenefits>;
   beforeId: string;
   afterId: string;
@@ -171,6 +175,8 @@ export function compareTimetables(
     before: a.result,
     after: b.result,
     benefits: compareBenefits(a.result, b.result),
+    consistency: comparisonConditions(a.result, b.result),
+    facts: comparisonFacts(a.result, b.result),
     assumptions: afterInput
       ? "同じダイヤ・異なる需要シナリオの比較。需要再推計型のダイヤ比較ではありません。"
       : "同じデータセットの駅ID・固定時間帯OD・配分条件で比較。営業区分は各ダイヤの実効設定を使用。運転間隔は有効出発機会、待ち時間は最速到着を選ぶ一様到着条件付き期待値。輸送完了は制約時の計算終了時点。",

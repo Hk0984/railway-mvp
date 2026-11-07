@@ -11,6 +11,9 @@ export class EventQueue {
   get size() {
     return this.heap.length;
   }
+  peek() {
+    return this.heap[0];
+  }
   private before(a: TimedEvent, b: TimedEvent) {
     return (
       a.time < b.time ||

@@ -2,10 +2,13 @@ import {
   assignDemand,
   aggregateTrainLoads,
   generalizedCost,
+  expandJourney,
 } from "./assignment";
 import { cachedProfile } from "./assignment-cache";
 import { transportCapacity } from "./capacity-model";
 import { allocateVolume } from "./temporal-demand";
+import { createRecorder, type AuditState } from "./assignment-diagnostics";
+import { demandKey } from "./result-conditions";
 import { EventQueue } from "./event-queue";
 import { demandDestination, stopEventId } from "./integration-model";
 import {
@@ -52,6 +55,8 @@ export function assignIntegratedCapacity(
   c: AssignmentConfig,
   onProgress?: (n: number, total: number, stage?: "od" | "events") => void,
 ): AssignmentResult {
+  const modern = c.competition === "simultaneous",
+    cutoff = c.boardingCutoffSeconds ?? 0;
   const started = performance.now(),
     unknown = new Set(
       [...index.trips]
@@ -102,6 +107,10 @@ export function assignIntegratedCapacity(
       onProgress,
     ),
     horizon = c.simulationEnd ?? c.end + c.maxJourneySeconds;
+  const setupStarted = performance.now();
+  let rerouteMs = 0,
+    boardingSearchMs = 0;
+  const stopCache = new Map<string, import("./model").Stop[]>();
   const packets: Packet[] = [],
     out: CapacityOutcome = {
       version: 2,
@@ -111,6 +120,7 @@ export function assignIntegratedCapacity(
       loads: aggregateTrainLoads(idx, { journeys: {}, allocations: [] }),
       totals: {
         selected: base.totals.selected,
+        notStarted: 0,
         completed: 0,
         inTransit: 0,
         walking: 0,
@@ -127,12 +137,44 @@ export function assignIntegratedCapacity(
       ],
       milliseconds: 0,
     };
+  const recorder = modern
+    ? createRecorder(base.totals.selected, c.diagnosticMode ?? "summary")
+    : undefined;
+  const trace = (
+    p: Packet,
+    kind: string,
+    time: number,
+    detail = "",
+    next: AuditState = p.state,
+    trainKey?: string,
+  ) => {
+    recorder?.record({
+      time,
+      kind,
+      packetId: p.id,
+      parentId: p.parentId,
+      cohortId: p.cohortId,
+      demandIndex: cohorts.get(p.cohortId)!.demandIndex,
+      passengers: p.passengers,
+      datasetId: p.datasetId,
+      stationId: p.stationId,
+      trainKey,
+      from: p.state,
+      to: next,
+      detail,
+    });
+    p.state = next;
+  };
   const heap = new EventQueue(),
     cohorts = new Map(base.cohorts.map((v) => [v.id, v])),
     queues = new Map<string, Packet[]>(),
     closed = new Set<string>(),
     loads = new Map(out.loads.map((l) => [l.key, l]));
   const cars = new Map<string, { count: number; people: Set<Packet> }>();
+  const pending = new Map<
+    string,
+    { id: string; k: string; i: number; time: number }
+  >();
   let serial = 0,
     eventCount = 0;
   const log = (
@@ -171,7 +213,7 @@ export function assignIntegratedCapacity(
     if (!l) throw new Error("乗車予定なしの待機要求");
     if (
       stationKey(location(p)) !== stationKey(l.origin) ||
-      l.departure + 1e-8 < p.ready
+      l.departure - cutoff + 1e-8 < p.ready
     )
       throw new Error("徒歩完了・最低乗換時間を満たさない乗車要求");
     const id = stopEventId(
@@ -181,6 +223,12 @@ export function assignIntegratedCapacity(
       l.boardIndex,
       "departure",
     );
+    if (closed.has(id) && modern) {
+      p.reason = "同時発車段階終了後のゼロ所要接続。後続便を再探索";
+      trace(p, "connection-closed", l.departure, p.reason, "waiting");
+      reroute(p, l.departure);
+      return;
+    }
     if (closed.has(id))
       throw new Error(
         "既に出発した同時刻便への接続です。ゼロ所要の同時刻連鎖は再設定してください",
@@ -188,7 +236,7 @@ export function assignIntegratedCapacity(
     const list = queues.get(id) ?? [];
     list.push(p);
     queues.set(id, list);
-    p.state = "waiting";
+    trace(p, "ready", p.ready, "乗車候補確定", "waiting");
   };
   function transfer(p: Packet, w: Walk, now: number) {
     const from = location(p),
@@ -214,10 +262,11 @@ export function assignIntegratedCapacity(
       linkIds: w.ids.slice(),
     });
     if (p.deniedSince !== undefined) p.deniedWalk += physical;
-    p.state = "walking";
+    trace(p, "walk-start", now, "明示徒歩連絡", "walking");
     heap.push(now + physical, 1, () => {
       p.datasetId = w.to.datasetId;
       p.stationId = w.to.stationId;
+      trace(p, "walk-end", now + physical, "徒歩完了", "waiting");
       enqueue(p);
     });
   }
@@ -229,6 +278,7 @@ export function assignIntegratedCapacity(
     log(p, "alight", l.arrival, l);
     p.datasetId = l.destination.datasetId;
     p.stationId = l.destination.stationId;
+    trace(p, "alight", l.arrival, "降車", "waiting", key(l));
     p.lastAlight = l.arrival;
     p.lastArrival = l.arrival;
     p.transferSeconds = 0;
@@ -239,7 +289,7 @@ export function assignIntegratedCapacity(
         stationId: p.destination,
       })
     ) {
-      p.state = "completed";
+      trace(p, "completed", l.arrival, "目的地到着", "completed");
       p.completedAt = l.arrival;
       p.plan = [];
       return;
@@ -259,12 +309,20 @@ export function assignIntegratedCapacity(
     transfer(p, w, l.arrival);
   }
   function reroute(p: Packet, now: number) {
+    const t = performance.now();
+    try {
+      rerouteCore(p, now);
+    } finally {
+      rerouteMs += performance.now() - t;
+    }
+  }
+  function rerouteCore(p: Packet, now: number) {
     const remaining = c.maxTransfers + 1 - p.history.length,
       deadline = p.firstArrival + c.maxJourneySeconds,
       row = input[cohorts.get(p.cohortId)!.demandIndex];
     p.plan = [];
     p.planTransfers = [];
-    p.state = "waiting";
+    trace(p, "reroute", now, "積み残し後の再探索", "waiting");
     if (remaining <= 0) {
       p.reason = "残り乗換回数なし";
       return;
@@ -284,13 +342,15 @@ export function assignIntegratedCapacity(
           origin: w.to,
           destination: demandDestination(row),
           mode: "depart",
-          time,
+          time: time + cutoff,
           sort: "arrival",
           maxTransfers: remaining - 1,
-          minimumTransferSeconds: c.minimumTransferSeconds,
+          minimumTransferSeconds: c.minimumTransferSeconds + cutoff,
           directOnly: remaining === 1,
           candidateMode: "choices",
-          windowEnd: deadline,
+          windowEnd: modern
+            ? c.end + (row.accessSeconds ?? 0) + c.maxJourneySeconds
+            : deadline,
         });
         for (const j of js)
           if (
@@ -345,6 +405,8 @@ export function assignIntegratedCapacity(
         : {
             ...snapshot,
             id: serial++,
+            parentId: p.id,
+            rootId: p.rootId ?? p.id,
             history: snapshot.history.slice(),
             walks: snapshot.walks?.slice(),
           };
@@ -352,11 +414,286 @@ export function assignIntegratedCapacity(
       part.plan = v.j.legs.slice();
       part.planTransfers = v.j.transfers.slice();
       if (!first) packets.push(part);
+      trace(
+        part,
+        "route-selected",
+        now,
+        v.j.legs.map((l) => key(l)).join(" → "),
+      );
       first = false;
       transfer(part, v.w, now);
     });
   }
+  function board(
+    waiting: Packet,
+    amount: number,
+    j: Journey | undefined,
+    k: string,
+    i: number,
+    time: number,
+  ) {
+    const car = cars.get(k)!;
+    let p = waiting;
+    if (amount < waiting.passengers - 1e-9) {
+      p = {
+        ...waiting,
+        id: serial++,
+        parentId: waiting.id,
+        rootId: waiting.rootId ?? waiting.id,
+        passengers: amount,
+        history: waiting.history.slice(),
+        walks: waiting.walks?.slice(),
+        plan: waiting.plan.slice(),
+        planTransfers: waiting.planTransfers.slice(),
+      };
+      waiting.passengers -= amount;
+      packets.push(p);
+      trace(p, "split", time, "分割元 " + waiting.id);
+    }
+    if (j) {
+      const full = expandJourney(idx, j, stopCache);
+      p.plan = full.legs.slice();
+      p.planTransfers = full.transfers.slice();
+      trace(p, "route-selected", time, p.plan.map(key).join(" → "));
+    }
+    const leg = p.plan.shift()!;
+    p.history = [...p.history, leg];
+    trace(p, "board", time, "乗車成功", "inTransit", k);
+    p.transferSeconds = 0;
+    car.count += amount;
+    car.people.add(p);
+    loads.get(k)!.boardings[i] += amount;
+    const extra =
+      p.deniedSince === undefined
+        ? 0
+        : Math.max(0, time - p.deniedSince - p.deniedWalk) * amount;
+    log(
+      p,
+      "board",
+      time,
+      leg,
+      amount,
+      p.deniedSince === undefined ? 0 : amount,
+      extra,
+    );
+    delete p.deniedSince;
+    p.deniedWalk = 0;
+    heap.push(leg.arrival, 0, () => alight(p, leg));
+    return p;
+  }
+  const stable = (p: Packet) =>
+    JSON.stringify([
+      demandKey(input[cohorts.get(p.cohortId)!.demandIndex]),
+      p.firstArrival,
+      p.history.map((l) => [l.origin, l.destination, l.departure, l.arrival]),
+    ]);
+  function concurrentDepart() {
+    const stops = [...pending.values()],
+      time = stops[0].time;
+    pending.clear();
+    const stopsById = new Map(stops.map((s) => [s.id, s]));
+    const waiting = [...new Set(stops.flatMap((s) => queues.get(s.id) ?? []))]
+      .filter((p) => p.state === "waiting")
+      .sort((a, b) => a.ready - b.ready || stable(a).localeCompare(stable(b)));
+    for (const s of stops) {
+      queues.delete(s.id);
+      closed.add(s.id);
+    }
+    const choices = new Map<
+      Packet,
+      { j: Journey; stop: (typeof stops)[number]; cost: number }[]
+    >();
+    for (const p of waiting) {
+      if (p.ready > time - cutoff + 1e-8)
+        throw new Error("乗車締切・乗換時間の矛盾");
+      const row = input[cohorts.get(p.cohortId)!.demandIndex],
+        remaining = c.maxTransfers - p.history.length;
+      const q = {
+        origin: location(p),
+        destination: demandDestination(row),
+        mode: "depart" as const,
+        time,
+        sort: "arrival" as const,
+        maxTransfers: remaining,
+        minimumTransferSeconds: c.minimumTransferSeconds + cutoff,
+        directOnly: remaining === 0,
+        candidateMode: "choices" as const,
+        compactProfile: true,
+        windowEnd: c.end + (row.accessSeconds ?? 0) + c.maxJourneySeconds,
+      };
+      const searchStarted = performance.now();
+      const js = cachedProfile(idx, q).filter(
+        (j) =>
+          j.departure === time &&
+          j.arrival - p.firstArrival <= c.maxJourneySeconds &&
+          (p.history.length || time - p.firstArrival <= c.maxWaitSeconds),
+      );
+      boardingSearchMs += performance.now() - searchStarted;
+      const cs = js
+        .flatMap((j) => {
+          const l = j.legs[0],
+            id = stopEventId(
+              l.datasetId,
+              l.timetableId,
+              l.trainId,
+              l.boardIndex,
+              "departure",
+            ),
+            stop = stopsById.get(id);
+          return stop
+            ? [
+                {
+                  j,
+                  stop,
+                  cost: generalizedCost(
+                    j,
+                    p.firstArrival,
+                    c.coefficients[row.purpose],
+                  ),
+                },
+              ]
+            : [];
+        })
+        .sort(
+          (a, b) =>
+            a.j.arrival - b.j.arrival ||
+            a.cost - b.cost ||
+            JSON.stringify(
+              a.j.legs.map((l) => [
+                l.origin,
+                l.destination,
+                l.departure,
+                l.arrival,
+              ]),
+            ).localeCompare(
+              JSON.stringify(
+                b.j.legs.map((l) => [
+                  l.origin,
+                  l.destination,
+                  l.departure,
+                  l.arrival,
+                ]),
+              ),
+            ) ||
+            a.j.id.localeCompare(b.j.id),
+        );
+      choices.set(p, cs);
+      trace(
+        p,
+        "boarding-candidates",
+        time,
+        cs.map((v) => v.stop.k).join(" | "),
+      );
+    }
+    for (let from = 0; from < waiting.length;) {
+      let end = from + 1;
+      while (
+        end < waiting.length &&
+        near(waiting[end].ready, waiting[from].ready)
+      )
+        end++;
+      const remaining = new Map(
+        waiting.slice(from, end).map((p) => [p, p.passengers]),
+      );
+      for (let round = 0; round < stops.length + 2; round++) {
+        const requests = new Map<
+          string,
+          { p: Packet; j: Journey; n: number; stop: (typeof stops)[number] }[]
+        >();
+        for (const [p, n] of remaining) {
+          if (n < 1e-8) continue;
+          let cs = (choices.get(p) ?? []).filter((v) => {
+            const car = cars.get(v.stop.k)!,
+              cap = loads.get(v.stop.k)!.capacity!;
+            return cap - car.count > 1e-8;
+          });
+          if (!cs.length) continue;
+          if (c.method === "fastest") {
+            const a = cs[0];
+            cs = cs.filter(
+              (v) =>
+                v.j.arrival === a.j.arrival &&
+                v.j.transferCount === a.j.transferCount &&
+                near(v.cost, a.cost),
+            );
+          } else cs = cs.sort((a, b) => a.cost - b.cost).slice(0, c.maxChoices);
+          const best = Math.min(...cs.map((v) => v.cost)),
+            weights = cs.map((v) =>
+              c.method === "fastest"
+                ? 1
+                : Math.exp(
+                    -c.coefficients[
+                      input[cohorts.get(p.cohortId)!.demandIndex].purpose
+                    ].scale *
+                      (v.cost - best),
+                  ),
+            ),
+            volumes = allocateVolume(n, weights, c.integer);
+          cs.forEach((v, i) => {
+            if (!volumes[i]) return;
+            const list = requests.get(v.stop.k) ?? [];
+            list.push({ p, j: v.j, n: volumes[i], stop: v.stop });
+            requests.set(v.stop.k, list);
+          });
+        }
+        if (!requests.size) break;
+        let progress = 0;
+        // Resolve every train from the same proposal snapshot, then apply accepted counts.
+        const accepted: {
+          p: Packet;
+          j: Journey;
+          n: number;
+          stop: (typeof stops)[number];
+        }[] = [];
+        for (const list of requests.values()) {
+          list.sort((a, b) => stable(a.p).localeCompare(stable(b.p)));
+          const stop = list[0].stop,
+            space = Math.max(
+              0,
+              loads.get(stop.k)!.capacity! - cars.get(stop.k)!.count,
+            ),
+            total = list.reduce((s, v) => s + v.n, 0),
+            amount = Math.min(space, total),
+            counts = allocateVolume(
+              amount,
+              list.map((v) => v.n),
+              c.integer,
+            );
+          list.forEach((v, i) => {
+            if (counts[i]) accepted.push({ ...v, n: counts[i] });
+          });
+        }
+        for (const v of accepted) {
+          board(v.p, v.n, v.j, v.stop.k, v.stop.i, time);
+          remaining.set(v.p, Math.max(0, remaining.get(v.p)! - v.n));
+          progress += v.n;
+        }
+        if (progress < 1e-8) break;
+      }
+      for (const [p, n] of remaining)
+        if (n > 1e-7) {
+          const leg = p.plan[0];
+          p.denials++;
+          p.deniedSince ??= time;
+          trace(
+            p,
+            "denied",
+            time,
+            "同時刻候補の定員不足・積み残し",
+            "waiting",
+            key(leg),
+          );
+          log(p, "denied", time, leg);
+          reroute(p, time);
+        }
+      from = end;
+    }
+  }
   function depart(id: string, k: string, i: number, time: number) {
+    if (modern) {
+      pending.set(id, { id, k, i, time });
+      return;
+    }
     closed.add(id);
     const list = queues.get(id) ?? [];
     queues.delete(id);
@@ -453,7 +790,7 @@ export function assignIntegratedCapacity(
         destinationDatasetId: r.destinationDatasetId ?? r.datasetId,
         stationId: r.origin,
         destination: r.destination,
-        state: "waiting",
+        state: modern ? "notStarted" : "waiting",
         ready: cohort.arrival,
         firstArrival: cohort.arrival,
         history: [],
@@ -464,13 +801,38 @@ export function assignIntegratedCapacity(
         deniedWalk: 0,
         reason,
       };
+    p.rootId = p.id;
     packets.push(p);
     const arrive = () => {
+      if (modern) trace(p, "arrival", cohort.arrival, "駅到着", "waiting");
       if (j) enqueue(p);
-      else p.state = "noPath";
+      else
+        trace(
+          p,
+          "untransported",
+          cohort.arrival,
+          reason ?? "経路なし",
+          "noPath",
+        );
     };
     const access = r.accessSeconds ?? 0;
     heap.push(cohort.arrival - access, 1, () => {
+      if (modern) {
+        trace(
+          p,
+          "demand",
+          cohort.arrival - access,
+          "需要発生",
+          access ? "walking" : "waiting",
+        );
+        if (j)
+          trace(
+            p,
+            "initial-route",
+            cohort.arrival - access,
+            j.legs.map(key).join(" → "),
+          );
+      }
       if (access) {
         p.walks!.push({
           from: location(p),
@@ -489,14 +851,33 @@ export function assignIntegratedCapacity(
     create(a.cohortId, a.passengers, base.journeys[a.journeyId]);
   for (const a of base.unallocated)
     create(a.cohortId, a.passengers, undefined, a.reason);
+  const eventSetupMs = performance.now() - setupStarted,
+    eventStarted = performance.now();
   while (heap.size) {
     const event = heap.pop()!;
     if (event.time > horizon) break;
     event.run();
+    if (
+      modern &&
+      pending.size &&
+      (!heap.peek() || heap.peek().time !== event.time)
+    )
+      concurrentDepart();
+    if (modern && (!heap.peek() || heap.peek().time !== event.time))
+      recorder!.point(event.time);
     if (++eventCount % 256 === 0)
       onProgress?.(eventCount, eventCount + heap.size, "events");
   }
+  const eventProcessingMs = performance.now() - eventStarted,
+    aggregationStarted = performance.now();
   for (const p of packets) {
+    if (modern && p.state !== "completed" && p.state !== "noPath")
+      trace(
+        p,
+        "untransported",
+        horizon,
+        p.reason ?? "計算終了時点の未輸送（状態を保持）",
+      );
     out.totals[p.state] += p.passengers;
     if (p.denials) out.totals.deniedUnique += p.passengers;
   }
@@ -534,6 +915,19 @@ export function assignIntegratedCapacity(
     l.peakOccupancy = l.peakLoad / l.capacity!;
   }
   base.config = structuredClone(c);
+  base.diagnostics.timings = {
+    ...base.diagnostics.timings,
+    eventSetupMs,
+    eventProcessingMs,
+    rerouteMs,
+    boardingSearchMs,
+    capacityAggregationMs: performance.now() - aggregationStarted,
+  };
+  if (recorder) {
+    recorder.data.timings = { ...base.diagnostics.timings };
+    recorder.point(horizon);
+    base.audit = recorder.data;
+  }
   out.milliseconds = performance.now() - started;
   base.capacity = out;
   const errors = validateIntegratedCapacity(idx, base, out);
@@ -555,6 +949,7 @@ export function validateIntegratedCapacity(
   )
     errors.push("全需要保存則");
   for (const state of [
+    "notStarted",
     "completed",
     "inTransit",
     "walking",
@@ -641,6 +1036,7 @@ export function validateIntegratedCapacity(
             walkClock,
             available +
               (legIndex ? base.config.minimumTransferSeconds : 0) +
+              (base.config.boardingCutoffSeconds ?? 0) +
               walked,
           ) ||
         l.arrival - p.firstArrival > base.config.maxJourneySeconds

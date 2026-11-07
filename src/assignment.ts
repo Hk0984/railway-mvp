@@ -4,11 +4,12 @@ import { capacityOf, isPassengerTrain } from "./classification";
 import { allocateVolume } from "./temporal-demand";
 import { cachedProfile } from "./assignment-cache";
 import { assignCapacity, validateCapacity } from "./capacity-assignment";
-import { transportCapacity } from "./capacity-model";
+import { transportCapacity, capacitySpec } from "./capacity-model";
 import {
   arrivalBreaks,
   arrivalWeight,
   selectedDemand,
+  arrivalVolumes,
 } from "./arrival-distribution";
 import { demandDestination, validateServiceMapping } from "./integration-model";
 import {
@@ -26,7 +27,11 @@ const close = (a: number, b: number) =>
   Math.abs(a - b) <= 1e-7 + 1e-12 * Math.max(Math.abs(a), Math.abs(b));
 const keyOf = (datasetId: string, timetableId: string, trainId: string) =>
   JSON.stringify([datasetId, timetableId, trainId]);
-export function expandJourney(index: RoutingIndex, j: Journey): Journey {
+export function expandJourney(
+  index: RoutingIndex,
+  j: Journey,
+  stopCache = new Map<string, import("./model").Stop[]>(),
+): Journey {
   const full = structuredClone(j);
   for (const leg of full.legs)
     if (!leg.stops.length) {
@@ -34,9 +39,13 @@ export function expandJourney(index: RoutingIndex, j: Journey): Journey {
         keyOf(leg.datasetId, leg.timetableId, leg.trainId),
       );
       if (!trip) throw new Error("候補旅程の列車が索引にありません");
-      leg.stops = structuredClone(
-        trip.visits.slice(leg.boardIndex, leg.alightIndex + 1),
-      );
+      const id = keyOf(leg.datasetId, leg.timetableId, leg.trainId);
+      let stops = stopCache.get(id);
+      if (!stops) {
+        stops = structuredClone(trip.visits);
+        stopCache.set(id, stops);
+      }
+      leg.stops = stops.slice(leg.boardIndex, leg.alightIndex + 1);
     }
   return full;
 }
@@ -61,10 +70,11 @@ export function queryFor(
     origin: { datasetId: row.datasetId, stationId: row.origin },
     destination: demandDestination(row),
     mode: "depart",
-    time,
+    time: time + (config.boardingCutoffSeconds ?? 0),
     sort: "arrival",
     maxTransfers: config.maxTransfers,
-    minimumTransferSeconds: config.minimumTransferSeconds,
+    minimumTransferSeconds:
+      config.minimumTransferSeconds + (config.boardingCutoffSeconds ?? 0),
     directOnly: config.maxTransfers === 0,
     candidateMode: "choices",
     compactProfile: true,
@@ -117,6 +127,38 @@ export function assignDemand(
     return assignCapacity(index, input, config, onProgress);
   const started = performance.now();
   const result: AssignmentResult = {
+    calculationVersion: "0.6",
+    provenance: structuredClone({
+      capacityBasis: index.selections.map((s) => ({
+        datasetId: s.datasetId,
+        rules: [
+          ...new Set(
+            s.project.timetables
+              .find((d) => d.id === s.timetableId)!
+              .trains.map((t) => {
+                const cap = capacitySpec(s.project, s.timetableId, t.id);
+                return JSON.stringify(
+                  cap
+                    ? { kind: cap.kind, basis: cap.basis, vehicle: cap.vehicle }
+                    : { kind: "unknown" },
+                );
+              }),
+          ),
+        ].sort(),
+      })),
+      datasets: index.selections.map((s) => ({
+        datasetId: s.datasetId,
+        timetableId: s.timetableId,
+      })),
+      walks: [...index.walks]
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([id, ws]) => [id, ws]),
+      demandAssumptions: index.selections.map((s) => ({
+        datasetId: s.datasetId,
+        railShare: s.project.stations.map((v) => [v.id, v.railShare]),
+        temporalConfig: s.project.temporal?.config ?? s.project.temporalConfig,
+      })),
+    }),
     config: structuredClone(config),
     input: structuredClone(input),
     cohorts: [],
@@ -163,13 +205,18 @@ export function assignDemand(
   });
   result.totals.outsideWindow = result.totals.input - result.totals.selected;
   let processed = 0;
+  const stopCache = new Map<string, import("./model").Stop[]>();
+  let searchMs = 0,
+    expansionMs = 0;
   for (const indices of groups.values()) {
     const rankingCache = new Map<string, { j: Journey; cost: number }[]>();
     const first = input[indices[0]];
     let journeys: Journey[] = [],
       profileError = "";
     try {
+      const searchStarted = performance.now();
       journeys = cachedProfile(index, queryFor(first, config, config.start));
+      searchMs += performance.now() - searchStarted;
       result.diagnostics.profiles++;
       result.diagnostics.candidateJourneys =
         (result.diagnostics.candidateJourneys ?? 0) + journeys.length;
@@ -179,6 +226,7 @@ export function assignDemand(
         `${first.origin}→${first.destination}: ${profileError}。対象需要は未配分として保持します`,
       );
     }
+    const expansionStarted = performance.now();
     for (const demandIndex of indices) {
       const row = input[demandIndex],
         start = Math.max(config.start, row.start),
@@ -195,25 +243,28 @@ export function assignDemand(
       for (const j of relevant)
         for (const t of [
           j.departure - access,
+          j.departure - access - (config.boardingCutoffSeconds ?? 0),
           j.departure - access - config.maxWaitSeconds,
           j.arrival - access - config.maxJourneySeconds,
         ])
           if (t > start && t < end) boundaries.add(t);
       arrivalBreaks(row, start, end, boundaries, config);
       const points = [...boundaries].sort((a, b) => a - b),
-        volumes = allocateVolume(
+        volumes = arrivalVolumes(
           total,
           points
             .slice(1)
             .map((b, i) => arrivalWeight(row, points[i], b, config)),
-          config.integer,
+          config,
         );
       for (let i = 0; i < volumes.length; i++) {
         const amount = volumes[i];
         if (amount === 0) continue;
         const a = points[i],
           b = points[i + 1],
-          arrival = (a + b) / 2 + access,
+          arrival =
+            (config.arrivalModel?.timing === "start" ? a : (a + b) / 2) +
+            access,
           cohort: ArrivalCohort = {
             id: `${demandIndex}:${i}`,
             demandIndex,
@@ -225,7 +276,7 @@ export function assignDemand(
         result.cohorts.push(cohort);
         const feasible = relevant.filter(
             (j) =>
-              j.departure >= arrival &&
+              j.departure >= arrival + (config.boardingCutoffSeconds ?? 0) &&
               j.departure - arrival <= config.maxWaitSeconds &&
               j.arrival - arrival <= config.maxJourneySeconds,
           ),
@@ -271,7 +322,11 @@ export function assignDemand(
         choices.forEach((choice, i) => {
           if (!counts[i]) return;
           if (!result.journeys[choice.j.id])
-            result.journeys[choice.j.id] = expandJourney(index, choice.j);
+            result.journeys[choice.j.id] = expandJourney(
+              index,
+              choice.j,
+              stopCache,
+            );
           result.allocations.push({
             cohortId: cohort.id,
             journeyId: choice.j.id,
@@ -282,14 +337,24 @@ export function assignDemand(
         });
       }
     }
+    expansionMs += performance.now() - expansionStarted;
     onProgress?.(++processed, groups.size);
   }
   result.totals.assigned = sum(result.allocations.map((a) => a.passengers));
   result.totals.unassigned = sum(result.unallocated.map((a) => a.passengers));
+  const aggregateStarted = performance.now();
   result.loads = aggregateTrainLoads(index, result);
+  const aggregationMs = performance.now() - aggregateStarted;
   result.totals.boardingEvents = sum(result.loads.map((l) => l.totalBoardings));
   result.diagnostics.milliseconds = performance.now() - started;
+  const validationStarted = performance.now();
   const errors = validateAssignment(index, result);
+  result.diagnostics.timings = {
+    searchMs,
+    expansionMs,
+    aggregationMs,
+    validationMs: performance.now() - validationStarted,
+  };
   if (errors.length)
     throw new Error("配分収支の検証失敗: " + errors.slice(0, 5).join(" / "));
   return result;

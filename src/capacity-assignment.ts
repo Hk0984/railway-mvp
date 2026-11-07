@@ -24,8 +24,10 @@ import {
   validateIntegratedCapacity,
 } from "./integrated-assignment";
 export type PassengerState =
-  "completed" | "inTransit" | "waiting" | "noPath" | "walking";
+  "notStarted" | "completed" | "inTransit" | "waiting" | "noPath" | "walking";
 export interface CapacityPacket {
+  parentId?: number;
+  rootId?: number;
   datasetId?: string;
   destinationDatasetId?: string;
   walks?: {
@@ -95,6 +97,8 @@ export function assignCapacity(
   onProgress?: (n: number, total: number, stage?: "od" | "events") => void,
 ): AssignmentResult {
   if (
+    config.competition === "simultaneous" ||
+    !!config.boardingCutoffSeconds ||
     index.selections.length > 1 ||
     [...index.walks.values()].some((ws) => ws.some((w) => w.ids.length)) ||
     config.arrivalModel?.mode === "minute" ||
@@ -150,6 +154,7 @@ export function assignCapacity(
     events: [],
     loads: aggregateTrainLoads(idx, { journeys: {}, allocations: [] }),
     totals: {
+      notStarted: 0,
       selected: base.totals.selected,
       completed: 0,
       inTransit: 0,

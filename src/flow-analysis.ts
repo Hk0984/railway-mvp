@@ -1,4 +1,5 @@
 import type { AssignmentResult } from "./assignment-model";
+import { demandMapping } from "./result-conditions";
 import { stationKey, type JourneyLeg, type StationRef } from "./routing-model";
 export interface Flow {
   demandIndex: number;
@@ -176,7 +177,8 @@ export function trainContributions(r: AssignmentResult, trainKey: string) {
   );
 }
 export function compareBenefits(a: AssignmentResult, b: AssignmentResult) {
-  if (JSON.stringify(a.input) !== JSON.stringify(b.input))
+  const mapping = demandMapping(a.input, b.input);
+  if (!mapping)
     return {
       comparable: false,
       reason: "入力ODが異なるため固定需要の便益を算出しません",
@@ -238,7 +240,7 @@ export function compareBenefits(a: AssignmentResult, b: AssignmentResult) {
     waiting = 0;
   for (let d = 0; d < a.input.length; d++) {
     const left = (ag.get(d) ?? []).sort((x, y) => x.time - y.time),
-      right = (bg.get(d) ?? []).sort((x, y) => x.time - y.time);
+      right = (bg.get(mapping[d]) ?? []).sort((x, y) => x.time - y.time);
     const demand = a.input[d],
       odKey = JSON.stringify([
         demand.datasetId,
@@ -295,9 +297,11 @@ export function compareBenefits(a: AssignmentResult, b: AssignmentResult) {
       if (la < 1e-9) la = left[++i]?.passengers ?? 0;
       if (rb < 1e-9) rb = right[++j]?.passengers ?? 0;
     }
-    excluded +=
+    const unmatched =
       left.slice(i).reduce((s, f, k) => s + (k === 0 ? la : f.passengers), 0) +
       right.slice(j).reduce((s, f, k) => s + (k === 0 ? rb : f.passengers), 0);
+    excluded += unmatched;
+    od.excluded += unmatched;
   }
   return {
     comparable: true,

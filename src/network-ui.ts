@@ -1,4 +1,10 @@
-﻿import { workspace } from "./workspace";
+import {
+  diagnosticView,
+  diagnosticChange,
+  diagnosticCsv,
+} from "./diagnostic-ui";
+import { precisionView } from "./precision-analysis";
+import { workspace } from "./workspace";
 import { networkSample } from "./network-sample";
 import {
   validateIntegration,
@@ -35,6 +41,7 @@ import {
   type UIContext,
 } from "./ui-utils";
 import { purposeLabels, purposes } from "./temporal-model";
+let resultLabels: string[] = [];
 let results: AssignmentResult[] = [],
   resultIndex = 0,
   error = "",
@@ -119,7 +126,20 @@ function settings() {
         stepSeconds: 60,
       },
     };
-  return `<section class="panel" id="network-settings"><h2>統合ダイヤ・時刻分布</h2><p class="notice">ダイヤ名から曜日・カレンダーを推測しません。各路線のダイヤを選び、共通区分と設定根拠を明示してください。駅名・列車番号が同じでもIDを統合しません。</p><div class="table-wrap"><table><thead><tr><th>利用</th><th>データセット</th><th>対象ダイヤ</th><th>手動で対応する共通区分</th></tr></thead><tbody>${workspace.projects
+  const extra = `<details><summary>0.6：競合・時刻精度・診断</summary><p class="notice">同時刻一括方式は乗車可能時刻のFIFO、同着集団の比例配分を使います。整数の同余はOD内容・到着時刻・経路で決定します。秒単位の旅客時刻はモデル仮定で、時刻表の秒を推測しません。</p><div class="route-options"><label>乗車競合<select id="net-competition"><option value="simultaneous" ${c.competition === "simultaneous" ? "selected" : ""}>同時刻一括・FIFO・同着比例</option><option value="legacy" ${c.competition !== "simultaneous" ? "selected" : ""}>0.5互換（登録順）</option></select></label><label>枠内時刻<select id="net-timing">${[
+    ["midpoint", "A：従来の枠内中点"],
+    ["start", "B：枠開始"],
+    ["uniform", "C：一様到着の数値積分"],
+    ["weighted", "D：指定分布の数値積分"],
+  ]
+    .map(
+      ([v, text]) =>
+        `<option value="${v}" ${(c.arrivalModel?.timing ?? "midpoint") === v ? "selected" : ""}>${text}</option>`,
+    )
+    .join(
+      "",
+    )}</select></label>${numeric("net-integration", "積分刻み（秒・モデル仮定）", c.arrivalModel?.integrationSeconds ?? 1, 1)}${numeric("net-cutoff", "乗車締切（発車の何秒前）", c.boardingCutoffSeconds ?? 0)}<label>診断<select id="net-diagnostic"><option value="summary" ${c.diagnosticMode !== "full" ? "selected" : ""}>概要・人数監査</option><option value="full" ${c.diagnosticMode === "full" ? "selected" : ""}>全件・集団追跡</option></select></label></div><p>乗換時間と明示徒歩に締切秒を加えた時刻条件で判定します。締切0秒では発車時刻ちょうどを許可。Cは一様分布、Dは上の指定分布を使います。積分は秒刻みの中点による近似です。整数化で小さいセルの丸めに影響されます。</p></details>`;
+  return `<section class="panel" id="network-settings">${extra}<h2>統合ダイヤ・時刻分布</h2><p class="notice">ダイヤ名から曜日・カレンダーを推測しません。各路線のダイヤを選び、共通区分と設定根拠を明示してください。駅名・列車番号が同じでもIDを統合しません。</p><div class="table-wrap"><table><thead><tr><th>利用</th><th>データセット</th><th>対象ダイヤ</th><th>手動で対応する共通区分</th></tr></thead><tbody>${workspace.projects
     .map((p) => {
       const m = c.serviceMapping?.members.find(
         (m) => m.datasetId === p.datasetId,
@@ -140,7 +160,7 @@ function settings() {
     )
     .join(
       "",
-    )}</select></label>${numeric("net-step", "到着枠の刻み（秒）", c.arrivalModel?.stepSeconds ?? 60, 1)}<label>任意重み（カンマ区切り）<input id="net-weights" value="${e(c.arrivalModel?.weights?.join(",") ?? "")}" placeholder="例：1,2,4"></label><label>人数<select id="net-integer"><option value="fractional" ${!c.integer ? "selected" : ""}>実数</option><option value="integer" ${c.integer ? "selected" : ""}>整数・最大剰余</option></select></label>${numeric("net-transfers", "最大乗換回数", c.maxTransfers)}${numeric("net-minimum", "最低乗換（分）", c.minimumTransferSeconds / 60)}${numeric("net-wait", "初期待ち上限（分）", c.maxWaitSeconds / 60)}${numeric("net-duration", "総所要上限（分）", c.maxJourneySeconds / 60, 1)}${numeric("net-choices", "ロジット候補上限", c.maxChoices, 1)}<label>利用可能な移動制約タグ<input id="net-permits" value="${e(state?.permittedRestrictions.join(",") ?? "")}"></label></div><details><summary>目的別ロジット係数</summary><div class="table-wrap"><table><thead><tr><th>目的</th><th>乗車</th><th>待ち</th><th>徒歩</th><th>1乗換の分</th><th>感度</th></tr></thead><tbody>${purposes.map((p) => `<tr><td>${purposeLabels[p]}</td>${(["riding", "waiting", "walking", "transferPenalty", "scale"] as const).map((k) => `<td><input type="number" min="0" step="any" data-net-purpose="${p}" data-net-coefficient="${k}" value="${c.coefficients[p][k]}"></td>`).join("")}</tr>`).join("")}</tbody></table></div></details><p class="muted">需要時刻は出発駅で乗車機会を探し始める時刻です。アクセス時間はOD行で明示した場合だけ加算します。1分枠も発車境界で細分し、枠の中点で集計します。個人単位の連続到着ではありません。</p><div class="actions"><button data-net-action="save-settings" class="primary">統合条件を保存</button><button data-net-action="sample">架空の鉄道・バス網を追加</button><button data-net-action="workspace">全データ・統合設定JSON</button></div></section>`;
+    )}</select></label>${numeric("net-step", "到着枠の刻み（秒）", c.arrivalModel?.stepSeconds ?? 60, 1)}<label>任意重み（カンマ区切り）<input id="net-weights" value="${e(c.arrivalModel?.weights?.join(",") ?? "")}" placeholder="例：1,2,4"></label><label>人数<select id="net-integer"><option value="fractional" ${!c.integer ? "selected" : ""}>実数</option><option value="integer" ${c.integer ? "selected" : ""}>整数・最大剰余</option></select></label>${numeric("net-transfers", "最大乗換回数", c.maxTransfers)}${numeric("net-minimum", "最低乗換（分）", c.minimumTransferSeconds / 60)}${numeric("net-wait", "初期待ち上限（分）", c.maxWaitSeconds / 60)}${numeric("net-duration", "駅到着後の所要上限（分）", c.maxJourneySeconds / 60, 1)}${numeric("net-choices", "ロジット候補上限", c.maxChoices, 1)}<label>利用可能な移動制約タグ<input id="net-permits" value="${e(state?.permittedRestrictions.join(",") ?? "")}"></label></div><details><summary>目的別ロジット係数</summary><div class="table-wrap"><table><thead><tr><th>目的</th><th>乗車</th><th>待ち</th><th>徒歩</th><th>1乗換の分</th><th>感度</th></tr></thead><tbody>${purposes.map((p) => `<tr><td>${purposeLabels[p]}</td>${(["riding", "waiting", "walking", "transferPenalty", "scale"] as const).map((k) => `<td><input type="number" min="0" step="any" data-net-purpose="${p}" data-net-coefficient="${k}" value="${c.coefficients[p][k]}"></td>`).join("")}</tr>`).join("")}</tbody></table></div></details><p class="muted">需要時刻は出発駅で乗車機会を探し始める時刻です。アクセス時間はOD行で明示した場合だけ加算します。1分枠も発車境界で細分し、枠の中点で集計します。個人単位の連続到着ではありません。</p><div class="actions"><button data-net-action="save-settings" class="primary">統合条件を保存</button><button data-net-action="sample">架空の鉄道・バス網を追加</button><button data-net-action="workspace">全データ・統合設定JSON</button></div></section>`;
 }
 function links() {
   return `<section class="panel" id="network-links"><h2>徒歩連絡（明示設定のみ）</h2><div class="route-options"><label>接続元<select id="net-link-from">${options("")}</select></label><label>接続先<select id="net-link-to">${options("")}</select></label>${numeric("net-link-walk", "徒歩秒", 180)}${numeric("net-link-extra", "追加乗換秒", 0)}<label>方向<select id="net-link-direction"><option value="forward">片方向</option><option value="both">双方向</option></select></label><label>移動制約タグ<input id="net-link-restrictions" placeholder="未入力＝制約なし"></label><label>設定根拠<input id="net-link-basis"></label><button data-net-action="add-link">徒歩連絡を追加</button></div><p class="muted">移動制約付きリンクは、統合条件でそのタグを明示許可した場合だけ利用します。無効化したリンクは保存したまま検索から除外します。</p><div class="table-wrap"><table><thead><tr><th>接続</th><th>方向</th><th>徒歩＋追加</th><th>制約・根拠</th><th>操作</th></tr></thead><tbody>${workspace.transferLinks.map((l) => `<tr><td>${e(label(l.from))} → ${e(label(l.to))}</td><td>${l.direction === "both" ? "双方向" : "片方向"}</td><td>${l.walkingSeconds}＋${l.additionalTransferSeconds ?? 0}秒</td><td>${e(l.restrictions?.join(",") ?? "")} ／ ${e(l.basis)}</td><td><button data-net-toggle="${e(l.id)}">${l.enabled === false ? "有効にする" : "無効にする"}</button><button data-net-remove-link="${e(l.id)}">削除</button></td></tr>`).join("")}</tbody></table></div></section>`;
@@ -185,6 +205,7 @@ function resultsHtml(r: AssignmentResult) {
   const metrics = totals
     ? [
         ["需要", totals.selected],
+        ["需要発生前", totals.notStarted ?? 0],
         ["輸送完了", totals.completed],
         ["車内", totals.inTransit],
         ["徒歩・アクセス中", totals.walking],
@@ -196,11 +217,11 @@ function resultsHtml(r: AssignmentResult) {
         ["予定配分", r.totals.assigned],
         ["未配分", r.totals.unassigned],
       ];
-  return `<section class="panel" id="network-result"><h2>統合配分結果（推計）</h2><label>計算結果<select id="net-result-index">${results.map((v, i) => `<option value="${i}" ${i === resultIndex ? "selected" : ""}>${v.config.arrivalModel?.mode === "minute" ? "時刻分布" : "代表時刻"}・${v.config.capacityConstrained ? "定員制約あり" : "無制約"}</option>`).join("")}</select></label><div class="metrics">${metrics.map(([text, value]) => `<article class="metric"><span>${text}</span><strong>${n(value as number)}<small>人</small></strong></article>`).join("")}</div><p>乗車イベント ${n((r.capacity?.loads ?? r.loads).reduce((s, l) => s + l.totalBoardings, 0))}人回 ／ 積み残し経験 ${n(totals?.deniedUnique)}人 ／ 追加待ち ${n((totals?.additionalWaitPersonSeconds ?? 0) / 60)}人分。徒歩中を輸送完了に含めません。</p><div class="actions">${["result-json", "od-csv", "train-csv", "segment-csv", "paths-csv", "untransported-csv"].map((id) => `<button data-net-action="${id}">${({ "result-json": "分析結果JSON", "od-csv": "OD流動CSV", "train-csv": "列車CSV", "segment-csv": "区間CSV", "paths-csv": "旅程CSV", "untransported-csv": "未輸送CSV" } as Record<string, string>)[id]}</button>`).join("")}</div>${benefit ? `<p class="notice">代表時刻／時刻分布の比較：共通輸送 ${n(benefit.common)}人、比較対象外 ${n(benefit.excluded)}人、総旅客時間差 ${n(benefit.travelChangePersonSeconds / 60)}人分。${e(benefit.reason)}</p>` : ""}<details><summary>読込・計算警告</summary><ul>${[...new Set(r.capacity?.warnings ?? r.diagnostics.warnings)].map((w) => `<li>${e(w)}</li>`).join("")}</ul></details></section><section class="panel"><h2>OD別の旅客流動</h2><div class="route-options"><label>出発駅<select id="net-analysis-origin">${options(analysisOrigin)}</select></label><label>目的駅<select id="net-analysis-destination">${options(analysisDestination)}</select></label></div><div id="od-flow-summary"><p>対象 ${n(summary.demand)}人 ／ 輸送完了 ${n(summary.completed)}人 ／ 未輸送 ${n(summary.untransported)}人。</p><p>平均所要 ${n(summary.meanTravelSeconds === null ? null : summary.meanTravelSeconds / 60)}分 ／ 平均待ち ${n(summary.meanWaitingSeconds === null ? null : summary.meanWaitingSeconds / 60)}分 ／ 追加待ち ${n(extra / 60)}人分。平均の対象は輸送完了旅客のみ、時間評価から除外 ${n(summary.excludedTimePassengers)}人。</p></div><div class="table-wrap"><table><thead><tr><th>到着時刻</th><th>目的</th><th>状態</th><th>人数</th><th>利用列車・乗換</th></tr></thead><tbody>${selected
+  return `<section class="panel" id="network-result"><h2>統合配分結果（推計）</h2><label>計算結果<select id="net-result-index">${results.map((v, i) => `<option value="${i}" ${i === resultIndex ? "selected" : ""}>${e(resultLabels[i] ?? String(i + 1))} ／ ${v.config.arrivalModel?.mode === "minute" ? "時刻分布" : "代表時刻"}・${v.config.capacityConstrained ? "定員制約あり" : "無制約"}</option>`).join("")}</select></label><div class="metrics">${metrics.map(([text, value]) => `<article class="metric"><span>${text}</span><strong>${n(value as number)}<small>人</small></strong></article>`).join("")}</div><p>乗車イベント ${n((r.capacity?.loads ?? r.loads).reduce((s, l) => s + l.totalBoardings, 0))}人回 ／ 積み残し経験 ${n(totals?.deniedUnique)}人 ／ 追加待ち ${n((totals?.additionalWaitPersonSeconds ?? 0) / 60)}人分。徒歩中を輸送完了に含めません。</p><div class="actions">${["result-json", "od-csv", "train-csv", "segment-csv", "paths-csv", "untransported-csv"].map((id) => `<button data-net-action="${id}">${({ "result-json": "分析結果JSON", "od-csv": "OD流動CSV", "train-csv": "列車CSV", "segment-csv": "区間CSV", "paths-csv": "旅程CSV", "untransported-csv": "未輸送CSV" } as Record<string, string>)[id]}</button>`).join("")}</div>${benefit ? `<p class="notice">代表時刻／時刻分布の比較：共通輸送 ${n(benefit.common)}人、比較対象外 ${n(benefit.excluded)}人、総旅客時間差 ${n(benefit.travelChangePersonSeconds / 60)}人分。${e(benefit.reason)}</p>` : ""}<details><summary>読込・計算警告</summary><ul>${[...new Set(r.capacity?.warnings ?? r.diagnostics.warnings)].map((w) => `<li>${e(w)}</li>`).join("")}</ul></details></section><section class="panel"><h2>OD別の旅客流動</h2><div class="route-options"><label>出発駅<select id="net-analysis-origin">${options(analysisOrigin)}</select></label><label>目的駅<select id="net-analysis-destination">${options(analysisDestination)}</select></label></div><div id="od-flow-summary"><p>対象 ${n(summary.demand)}人 ／ 輸送完了 ${n(summary.completed)}人 ／ 未輸送 ${n(summary.untransported)}人。</p><p>平均所要 ${n(summary.meanTravelSeconds === null ? null : summary.meanTravelSeconds / 60)}分 ／ 平均待ち ${n(summary.meanWaitingSeconds === null ? null : summary.meanWaitingSeconds / 60)}分 ／ 追加待ち ${n(extra / 60)}人分。平均の対象は輸送完了旅客のみ、時間評価から除外 ${n(summary.excludedTimePassengers)}人。</p></div><div class="table-wrap"><table><thead><tr><th>到着時刻</th><th>目的</th><th>状態</th><th>人数</th><th>利用列車・乗換</th></tr></thead><tbody>${selected
     .slice(0, 100)
     .map(
       (f) =>
-        `<tr><td>${clock(f.time)}</td><td>${purposeLabels[f.purpose as keyof typeof purposeLabels]}</td><td>${e(({ completed: "輸送完了", inTransit: "車内移動", walking: "徒歩・アクセス中", waiting: "乗車待ち", noPath: "経路なし" } as Record<string, string>)[f.state])}</td><td>${n(f.passengers)}</td><td>${f.legs.map((l) => e(l.datasetId + " / " + l.timetableId + " / " + (l.trainNumber || l.trainId))).join(" → ") || "乗車なし"}（乗換 ${f.transfers}回）</td></tr>`,
+        `<tr><td>${clock(f.time)}</td><td>${purposeLabels[f.purpose as keyof typeof purposeLabels]}</td><td>${e(({ notStarted: "需要発生前", completed: "輸送完了", inTransit: "車内移動", walking: "徒歩・アクセス中", waiting: "乗車待ち", noPath: "経路なし" } as Record<string, string>)[f.state])}</td><td>${n(f.passengers)}</td><td>${f.legs.map((l) => e(l.datasetId + " / " + l.timetableId + " / " + (l.trainNumber || l.trainId))).join(" → ") || "乗車なし"}（乗換 ${f.transfers}回）</td></tr>`,
     )
     .join(
       "",
@@ -250,7 +271,7 @@ export function renderNetwork(ctx: UIContext) {
     stamp = "";
   }
   const r = results[resultIndex];
-  return `<div id="network-page"><p class="notice">統合配分は実測人数ではなく推計です。実ファイル同士の徒歩接続は自動登録しません。架空サンプルは計算検証用です。</p>${error ? `<p role="alert" class="notice">${e(error)}</p>` : ""}<p id="network-progress" role="status">${e(progress)}</p>${settings()}${links()}${demands()}<section class="panel"><div class="actions"><button data-net-action="run" class="primary">統合旅客配分を計算</button><button data-net-action="compare-arrival">代表時刻と時刻分布を比較</button>${worker ? '<button data-net-action="cancel">計算を中止</button>' : ""}</div></section>${r ? '<div id="network-results-area">' + resultsHtml(r) + "</div>" : '<div class="route-empty">条件・明示徒歩連絡・統合ODを確認して計算してください。</div>'}</div>`;
+  return `<div id="network-page"><p class="notice">統合配分は実測人数ではなく推計です。実ファイル同士の徒歩接続は自動登録しません。架空サンプルは計算検証用です。</p>${error ? `<p role="alert" class="notice">${e(error)}</p>` : ""}<p id="network-progress" role="status">${e(progress)}</p>${settings()}${links()}${demands()}<section class="panel"><div class="actions"><button data-net-action="run" class="primary">統合旅客配分を計算</button><button data-net-action="compare-arrival">代表時刻と時刻分布を比較</button><button data-net-action="precision">時刻精度4方式を比較</button><button data-net-action="scenario-range">仮定シナリオの変動幅を比較</button>${worker ? '<button data-net-action="cancel">計算を中止</button>' : ""}</div></section>${r ? '<div id="network-results-area">' + resultsHtml(r) + precisionView(results, resultLabels) + diagnosticView(r) + "</div>" : '<div class="route-empty">条件・明示徒歩連絡・統合ODを確認して計算してください。</div>'}</div>`;
 }
 function saveConditions(ctx: UIContext) {
   const previous = workspace.integration,
@@ -276,6 +297,9 @@ function saveConditions(ctx: UIContext) {
     });
   const config: AssignmentConfig = {
     ...base,
+    competition: read("net-competition") as "legacy" | "simultaneous",
+    diagnosticMode: read("net-diagnostic") as "summary" | "full",
+    boardingCutoffSeconds: Number(read("net-cutoff")),
     serviceMapping: {
       ...base.serviceMapping,
       group: read("net-group"),
@@ -296,6 +320,8 @@ function saveConditions(ctx: UIContext) {
     maxChoices: Number(read("net-choices")),
     arrivalModel: {
       ...base.arrivalModel,
+      timing: read("net-timing") as "midpoint",
+      integrationSeconds: Number(read("net-integration")),
       mode: read("net-arrival-mode") as "minute" | "representative",
       distribution: read("net-distribution") as "uniform",
       stepSeconds: Number(read("net-step")),
@@ -328,7 +354,7 @@ function saveConditions(ctx: UIContext) {
   draft.clear();
   ctx.save();
 }
-function start(ctx: UIContext, compareArrival: boolean) {
+function start(ctx: UIContext, compareArrival: boolean, experiment = "") {
   if (dirty) throw new Error("変更した統合条件を先に保存してください");
   const state = workspace.integration;
   if (!state)
@@ -350,6 +376,9 @@ function start(ctx: UIContext, compareArrival: boolean) {
         el.textContent = `${d.mode === "minute" ? "時刻分布" : "代表時刻"}：${d.done}/${d.total} ${d.stage === "events" ? "イベント" : "OD"}`;
       return;
     }
+    const transferMs = d.sentAt
+      ? performance.timeOrigin + performance.now() - d.sentAt
+      : null;
     worker = null;
     current.terminate();
     if (stamp !== fingerprint()) {
@@ -357,10 +386,27 @@ function start(ctx: UIContext, compareArrival: boolean) {
     } else if (d.type === "error") error = d.message;
     else {
       results = d.results;
+      resultLabels = d.labels ?? [];
       resultIndex = compareArrival ? 1 : 0;
       progress = "統合配分完了。全データセットで人数・時刻・定員を検証しました";
     }
+    const renderStarted = performance.now();
     ctx.render();
+    const renderMs = performance.now() - renderStarted;
+    if (d.type === "result") {
+      const report = {
+        workerComputeMs: d.workerComputeMs,
+        transferAndSchedulingMs: transferMs,
+        renderMs,
+        resultTimings: results.map((r) => r.diagnostics.timings),
+      };
+      (
+        globalThis as typeof globalThis & { railwayPerformance?: unknown }
+      ).railwayPerformance = report;
+      const target = document.querySelector("#network-progress");
+      if (target)
+        target.textContent += ` ／ Worker ${Math.round(d.workerComputeMs)}ms・転送等 ${Math.round(transferMs ?? 0)}ms・描画 ${Math.round(renderMs)}ms`;
+    }
   };
   current.onerror = (event) => {
     clear();
@@ -370,6 +416,7 @@ function start(ctx: UIContext, compareArrival: boolean) {
   current.postMessage({
     state,
     compareArrival,
+    experiment,
     links: workspace.transferLinks,
     projects: workspace.projects.map((p) => ({
       ...p,
@@ -411,7 +458,11 @@ export function networkClick(button: HTMLElement, ctx: UIContext) {
       workspace.transferLinks.push(...sample.links);
       workspace.integration = {
         version: 1,
-        config: sample.config,
+        config: {
+          ...sample.config,
+          competition: "simultaneous",
+          diagnosticMode: "summary",
+        },
         permittedRestrictions: [],
         demands: sample.demands,
       };
@@ -504,19 +555,45 @@ export function networkClick(button: HTMLElement, ctx: UIContext) {
       workspace.integration = next;
       clear();
       ctx.save();
-    } else if (action === "run" || action === "compare-arrival")
+    } else if (action === "precision" || action === "scenario-range")
+      start(ctx, false, action);
+    else if (action === "run" || action === "compare-arrival")
       start(ctx, action === "compare-arrival");
     else if (action === "cancel")
       clear("計算を中止しました。部分結果は表示しません");
     else {
       const r = results[resultIndex];
       if (!r) throw new Error("配分結果がありません");
+      if (action === "diagnostic-csv") {
+        download("assignment-diagnostic.csv", diagnosticCsv(r), "text/csv");
+        return true;
+      }
+      if (action === "diagnostic-json") {
+        download(
+          "assignment-diagnostic.json",
+          JSON.stringify(
+            {
+              version: "0.6",
+              config: r.config,
+              input: r.input,
+              audit: r.audit,
+              packets: r.capacity?.packets,
+            },
+            null,
+            2,
+          ),
+          "application/json",
+        );
+        return true;
+      }
       if (action === "result-json")
         download(
           "network-analysis.json",
           JSON.stringify(
             {
-              version: "0.5",
+              version: "0.6",
+              resultLabels,
+              comparisonResults: results.length > 1 ? results : undefined,
               generatedAt: new Date().toISOString(),
               serviceMapping: r.config.serviceMapping,
               result: r,
@@ -618,6 +695,8 @@ export async function networkChange(el: HTMLInputElement, ctx: UIContext) {
     ctx.render();
     return;
   }
+  if (results[resultIndex] && diagnosticChange(el, results[resultIndex]))
+    return;
   if (el.id === "net-result-index") {
     resultIndex = Number(el.value);
     ctx.render();

@@ -1,4 +1,4 @@
-﻿import { analytics, buildScenario, projectForScenario } from "./scenarios";
+import { analytics, buildScenario, projectForScenario } from "./scenarios";
 import {
   importObservations,
   observationTemplate,
@@ -349,7 +349,7 @@ export function analyticsClick(button: HTMLElement, ctx: UIContext) {
         download(
           "timetable-comparison.json",
           JSON.stringify(
-            { version: "0.5", datasetId: p.datasetId, comparison },
+            { version: "0.6", datasetId: p.datasetId, comparison },
             null,
             2,
           ),
