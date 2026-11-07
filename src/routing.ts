@@ -35,6 +35,7 @@ interface Ride {
 interface Walk {
   to: StationRef;
   seconds: number;
+  walkingSeconds?: number;
   ids: string[];
 }
 interface Label {
@@ -53,6 +54,16 @@ interface PathNode {
   ride: Ride;
   transfer?: JourneyTransfer;
   walkIds: string[];
+}
+let directRounds = new WeakMap<
+  RoutingIndex,
+  {
+    entries: Map<string, { labels: Map<string, Label[]>; weight: number }>;
+    weight: number;
+  }
+>();
+export function clearRoutingProfileCache() {
+  directRounds = new WeakMap();
 }
 export interface RoutingIndex {
   selections: DatasetSelection[];
@@ -91,7 +102,14 @@ export function validateTransferLinks(
       l.walkingSeconds < 0 ||
       !["forward", "both"].includes(l.direction) ||
       typeof l.basis !== "string" ||
-      !l.basis.trim()
+      !l.basis.trim() ||
+      (l.enabled !== undefined && typeof l.enabled !== "boolean") ||
+      (l.additionalTransferSeconds !== undefined &&
+        (!Number.isFinite(l.additionalTransferSeconds) ||
+          l.additionalTransferSeconds < 0)) ||
+      (l.restrictions !== undefined &&
+        (!Array.isArray(l.restrictions) ||
+          l.restrictions.some((x) => typeof x !== "string" || !x.trim())))
     )
       throw new Error("徒歩連絡のID・参照駅・方向・時間・設定根拠が不正です");
     ids.add(l.id);
@@ -100,6 +118,7 @@ export function validateTransferLinks(
 export function buildRoutingIndex(
   selections: DatasetSelection[],
   links: TransferLink[] = [],
+  options: { permittedRestrictions?: string[] } = {},
 ): RoutingIndex {
   if (
     !selections.length ||
@@ -173,10 +192,22 @@ export function buildRoutingIndex(
   validateTransferLinks(links, selections);
   const edges = new Map<string, Walk[]>();
   for (const l of links) {
+    if (l.enabled === false) continue;
+    if (
+      l.restrictions?.some((x) => !options.permittedRestrictions?.includes(x))
+    ) {
+      warnings.add(`徒歩連絡 ${l.id}: 移動制約が許可されていないため除外`);
+      continue;
+    }
     const add = (from: StationRef, to: StationRef) => {
       const key = stationKey(from),
         a = edges.get(key) ?? [];
-      a.push({ to, seconds: l.walkingSeconds, ids: [l.id] });
+      a.push({
+        to,
+        seconds: l.walkingSeconds + (l.additionalTransferSeconds ?? 0),
+        walkingSeconds: l.walkingSeconds,
+        ids: [l.id],
+      });
       edges.set(key, a);
     };
     add(l.from, l.to);
@@ -203,7 +234,14 @@ export function buildRoutingIndex(
         const target = stationKey(e.to),
           seconds = walk.seconds + e.seconds;
         if (!best.has(target) || seconds < best.get(target)!.seconds)
-          best.set(target, { to: e.to, seconds, ids: [...walk.ids, ...e.ids] });
+          best.set(target, {
+            to: e.to,
+            seconds,
+            walkingSeconds:
+              (walk.walkingSeconds ?? walk.seconds) +
+              (e.walkingSeconds ?? e.seconds),
+            ids: [...walk.ids, ...e.ids],
+          });
       }
     }
     walks.set(source, [...best.values()]);
@@ -285,7 +323,7 @@ function insert(
   map.set(label.key, kept);
   return true;
 }
-function materialize(l: Label): Journey {
+function materialize(l: Label, includeStops = true): Journey {
   const nodes = chain(l),
     transfers = nodes.flatMap((n) => (n.transfer ? [n.transfer] : []));
   const legs: JourneyLeg[] = nodes.map(({ ride: { trip, i, j } }) => {
@@ -305,7 +343,9 @@ function materialize(l: Label): Journey {
       arrival: b.arrival!,
       boardIndex: i,
       alightIndex: j,
-      stops: trip.visits.slice(i, j + 1).map((x) => ({ ...x })),
+      stops: includeStops
+        ? trip.visits.slice(i, j + 1).map((x) => ({ ...x }))
+        : [],
     };
   });
   return {
@@ -392,6 +432,21 @@ export function journeyProfile(index: RoutingIndex, q: RouteQuery): Journey[] {
   let work = 0;
   const choices = q.candidateMode === "choices",
     ridingCriterion = q.sort === "riding" || choices;
+  const direct = q.directOnly || q.maxTransfers === 0,
+    cacheKey = JSON.stringify([
+      originKey,
+      earliest,
+      latest,
+      ridingCriterion,
+      choices,
+    ]);
+  const cachedRound = direct
+    ? directRounds.get(index)?.entries.get(cacheKey)
+    : undefined;
+  if (cachedRound) {
+    const labels = cachedRound.labels.get(destinationKey) ?? [];
+    return labels.map((l) => materialize(l, !q.compactProfile));
+  }
   type BoardingLabel = {
     base: Label;
     walk: Walk;
@@ -447,7 +502,7 @@ export function journeyProfile(index: RoutingIndex, q: RouteQuery): Journey[] {
               walk,
               board,
               departure: round === 1 ? board.departure : base.departure,
-              walking: base.walking + walk.seconds,
+              walking: base.walking + (walk.walkingSeconds ?? walk.seconds),
               firstTrip: base.firstTrip || board.trip.key,
             };
             const labels = boardingLabels.get(board.id) ?? [];
@@ -480,7 +535,7 @@ export function journeyProfile(index: RoutingIndex, q: RouteQuery): Journey[] {
             arrival: stop.arrival!,
             departure: round === 1 ? board.departure : base.departure,
             riding: base.riding + stop.arrival! - board.departure,
-            walking: base.walking + walk.seconds,
+            walking: base.walking + (walk.walkingSeconds ?? walk.seconds),
             depth: round,
             firstTrip,
             path: {
@@ -501,13 +556,36 @@ export function journeyProfile(index: RoutingIndex, q: RouteQuery): Journey[] {
               to: walk.to,
               arrival: base.arrival,
               departure: board.departure,
-              walkingSeconds: walk.seconds,
-              waitingSeconds: board.departure - base.arrival - walk.seconds,
+              walkingSeconds: walk.walkingSeconds ?? walk.seconds,
+              waitingSeconds:
+                board.departure -
+                base.arrival -
+                (walk.walkingSeconds ?? walk.seconds),
               minimumSeconds: q.minimumTransferSeconds,
               linkIds: walk.ids,
             };
         }
       }
+    if (direct) {
+      let cache = directRounds.get(index);
+      if (!cache) {
+        cache = { entries: new Map(), weight: 0 };
+        directRounds.set(index, cache);
+      }
+      const weight = [...next.values()].reduce((s, list) => s + list.length, 0);
+      if (weight <= 20000) {
+        while (
+          cache.entries.size &&
+          (cache.entries.size >= 16 || cache.weight + weight > 20000)
+        ) {
+          const first = cache.entries.keys().next().value!;
+          cache.weight -= cache.entries.get(first)!.weight;
+          cache.entries.delete(first);
+        }
+        cache.entries.set(cacheKey, { labels: new Map(next), weight });
+        cache.weight += weight;
+      }
+    }
     for (const [key, list] of next)
       previousRounds.set(key, [...(previousRounds.get(key) ?? []), ...list]);
     finals.push(...(next.get(destinationKey) ?? []));
@@ -544,13 +622,13 @@ export function journeyProfile(index: RoutingIndex, q: RouteQuery): Journey[] {
       if (finalDominates(label, best[i])) best.splice(i, 1);
     best.push(label);
   }
-  return best.map(materialize);
+  return best.map((l) => materialize(l, !q.compactProfile));
 }
 export function searchJourneys(
   index: RoutingIndex,
   q: RouteQuery,
 ): RouteSearchResult {
-  const all = journeyProfile(index, q);
+  const all = journeyProfile(index, { ...q, compactProfile: false });
   const timeOrder = (a: Journey, b: Journey) =>
     q.mode === "arrive"
       ? b.departure - a.departure || a.arrival - b.arrival
@@ -648,14 +726,17 @@ export function validateJourney(
       if (
         !t ||
         !walk ||
-        t.walkingSeconds !== walk.seconds ||
+        t.walkingSeconds !== (walk.walkingSeconds ?? walk.seconds) ||
         t.arrival !== previous.arrival ||
         t.departure !== leg.departure ||
         stationKey(t.from) !== stationKey(previous.destination) ||
         stationKey(t.to) !== stationKey(leg.origin) ||
         leg.departure <
           previous.arrival + walk.seconds + q.minimumTransferSeconds ||
-        t.waitingSeconds !== leg.departure - previous.arrival - walk.seconds
+        t.waitingSeconds !==
+          leg.departure -
+            previous.arrival -
+            (walk.walkingSeconds ?? walk.seconds)
       )
         errors.push(`乗換${i}の時刻・徒歩連絡不正`);
     }

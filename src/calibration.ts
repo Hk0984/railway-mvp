@@ -13,14 +13,40 @@ export function evaluateTrainObservations(
   period: string,
 ): ErrorMetric {
   const loads = result.capacity?.loads ?? result.loads;
+  const excluded: { id: string; reason: string }[] = [];
   const rows = observations
     .filter((o) => o.kind === "load" && o.period === period)
     .flatMap((o) => {
-      const l = loads.find(
-          (l) => l.timetableId === o.timetableId && l.trainId === o.trainId,
-        ),
+      if (
+        (o.dayGroup && o.dayGroup !== result.config.serviceMapping?.group) ||
+        (o.startSeconds !== undefined &&
+          (o.startSeconds !== result.config.start ||
+            o.endSeconds !==
+              (result.capacity?.horizon ??
+                result.config.simulationEnd ??
+                result.config.end + result.config.maxJourneySeconds)))
+      ) {
+        excluded.push({
+          id: o.id,
+          reason: "曜日区分・輸送計算の観測期間が一致しません",
+        });
+        return [];
+      }
+      const matches = loads.filter(
+        (l) =>
+          l.timetableId === o.timetableId &&
+          l.trainId === o.trainId &&
+          (!o.datasetId || l.datasetId === o.datasetId),
+      );
+      const l = matches.length === 1 ? matches[0] : undefined,
         i = o.segmentIndex!;
-      if (!l || l.segmentObserved?.[i] === false) return [];
+      if (!l || l.segmentObserved?.[i] === false) {
+        excluded.push({
+          id: o.id,
+          reason: "対象便・区間が一意でない、または期間外です",
+        });
+        return [];
+      }
       const estimated = l.segmentLoads[i];
       if (estimated === undefined) return [];
       const error = estimated - o.value;
@@ -37,6 +63,10 @@ export function evaluateTrainObservations(
     });
   return {
     count: rows.length,
+    meanError: rows.length
+      ? rows.reduce((s, r) => s + r.error, 0) / rows.length
+      : null,
+    excluded,
     mae: rows.length
       ? rows.reduce((s, r) => s + Math.abs(r.error), 0) / rows.length
       : null,
@@ -51,6 +81,10 @@ import {
   defaultTemporalConfig,
 } from "./temporal-demand";
 export interface Observation {
+  datasetId?: string;
+  dayGroup?: string;
+  startSeconds?: number;
+  endSeconds?: number;
   id: string;
   kind: "boarding" | "alighting" | "od" | "load";
   stationId: string;
@@ -65,6 +99,8 @@ export interface Observation {
   role: "fit" | "validation";
 }
 export interface ErrorMetric {
+  meanError?: number | null;
+  excluded?: { id: string; reason: string }[];
   count: number;
   mae: number | null;
   rmse: number | null;
@@ -78,6 +114,7 @@ export interface ErrorMetric {
   }[];
 }
 export interface CalibrationRun {
+  observationSnapshot?: Observation[];
   id: string;
   period: string;
   targetStations: string[];
@@ -106,16 +143,58 @@ const columns = [
   "source",
   "role",
 ];
-export function observationTemplate() {
+export function observationTemplate(extended = false) {
   return csv([
-    columns,
-    ["od", "", "s0", "s4", "", "", "", "対象期間", 100, "出典を記入", "fit"],
+    extended
+      ? [...columns, "datasetId", "dayGroup", "startSeconds", "endSeconds"]
+      : columns,
+    extended
+      ? [
+          "od",
+          "",
+          "s0",
+          "s4",
+          "",
+          "",
+          "",
+          "対象期間",
+          100,
+          "出典を記入",
+          "fit",
+          "",
+          "",
+          "",
+          "",
+        ]
+      : [
+          "od",
+          "",
+          "s0",
+          "s4",
+          "",
+          "",
+          "",
+          "対象期間",
+          100,
+          "出典を記入",
+          "fit",
+        ],
   ]);
 }
 export function validateObservations(p: Project, rows: Observation[]) {
   const ids = new Set(p.stations.map((s) => s.id)),
     keys = new Set<string>();
   for (const r of rows) {
+    if (
+      (r.datasetId !== undefined && r.datasetId !== p.datasetId) ||
+      (r.dayGroup !== undefined && !r.dayGroup.trim()) ||
+      ((r.startSeconds !== undefined || r.endSeconds !== undefined) &&
+        (!Number.isFinite(r.startSeconds) ||
+          !Number.isFinite(r.endSeconds) ||
+          r.startSeconds! < 0 ||
+          r.endSeconds! <= r.startSeconds!))
+    )
+      throw new Error("観測のデータセット・曜日・時間条件が不正です");
     const key = JSON.stringify([
       r.kind,
       r.stationId,
@@ -126,6 +205,10 @@ export function validateObservations(p: Project, rows: Observation[]) {
       r.segmentIndex,
       r.period,
       r.role,
+      r.datasetId,
+      r.dayGroup,
+      r.startSeconds,
+      r.endSeconds,
     ]);
     if (
       !r.id ||
@@ -167,12 +250,27 @@ export function validateObservations(p: Project, rows: Observation[]) {
 }
 export function importObservations(p: Project, text: string) {
   const [header, ...lines] = parseCsv(text);
-  if (!header || JSON.stringify(header) !== JSON.stringify(columns))
+  const extended =
+    JSON.stringify(header) ===
+    JSON.stringify([
+      ...columns,
+      "datasetId",
+      "dayGroup",
+      "startSeconds",
+      "endSeconds",
+    ]);
+  if (
+    !header ||
+    (!extended && JSON.stringify(header) !== JSON.stringify(columns))
+  )
     throw new Error("実測CSVの列はテンプレートと同じ順序で指定してください");
   const result = lines
     .filter((r) => r.some(Boolean))
     .map((r, i) => {
-      if (r.length !== columns.length || !r[8].trim())
+      if (
+        r.length !== (extended ? columns.length + 4 : columns.length) ||
+        !r[8].trim()
+      )
         throw new Error("実測CSVの列数・人数が不正です");
       return {
         id: `obs-${i}`,
@@ -187,6 +285,14 @@ export function importObservations(p: Project, text: string) {
         value: Number(r[8]),
         source: r[9],
         role: r[10],
+        ...(extended
+          ? {
+              datasetId: r[11] || undefined,
+              dayGroup: r[12] || undefined,
+              startSeconds: r[13] === "" ? undefined : Number(r[13]),
+              endSeconds: r[14] === "" ? undefined : Number(r[14]),
+            }
+          : {}),
       } as Observation;
     });
   validateObservations(p, result);
@@ -224,6 +330,9 @@ export function evaluateObservations(
     });
   return {
     count: rows.length,
+    meanError: rows.length
+      ? rows.reduce((s, r) => s + r.error, 0) / rows.length
+      : null,
     mae: rows.length
       ? rows.reduce((s, r) => s + Math.abs(r.error), 0) / rows.length
       : null,
@@ -260,6 +369,21 @@ export function calibrateDemand(
             ? "列車実測は配分検証用として分離"
             : "駅別乗降とOD発生集中の同一視が未承認",
       });
+  if (
+    new Set(
+      selected.map((o) =>
+        JSON.stringify([
+          o.datasetId ?? p.datasetId,
+          o.dayGroup,
+          o.startSeconds,
+          o.endSeconds,
+        ]),
+      ),
+    ).size > 1
+  )
+    throw new Error(
+      "同一期間に異なる観測条件が混在しています。期間ラベルを分けてください",
+    );
   const accepted = selected.filter((r) => !excluded.some((e) => e.id === r.id)),
     fit = accepted.filter((r) => r.role === "fit"),
     constraints = fit.filter((r) => r.kind !== "od");
@@ -271,6 +395,17 @@ export function calibrateDemand(
     ),
     seedCoefficients = structuredClone(c);
   let selectedCoefficients = structuredClone(c);
+  if (
+    accepted.some(
+      (o) =>
+        o.startSeconds !== undefined &&
+        (o.startSeconds !== c.serviceDayStart ||
+          o.endSeconds !== c.serviceDayStart + 86400),
+    )
+  )
+    throw new Error(
+      "日間往路ODの校正に部分時間帯の観測は使用できません。日間全体の条件を指定してください",
+    );
   // Bounded grid search, trained exclusively on fit OD; validation rows never influence selection.
   if (fitCoefficients && fit.some((r) => r.kind === "od")) {
     let best = Infinity;
@@ -348,6 +483,7 @@ export function calibrateDemand(
     selectedCoefficients,
     seedDaily: structuredClone(seed),
     costSnapshot: structuredClone(p.temporal?.costs ?? p.costs),
+    observationSnapshot: structuredClone(selected),
     daily,
     method: fitCoefficients
       ? "有界格子探索（β・雇用吸引係数倍率）→IPF"

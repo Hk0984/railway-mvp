@@ -6,6 +6,12 @@ import { cachedProfile } from "./assignment-cache";
 import { assignCapacity, validateCapacity } from "./capacity-assignment";
 import { transportCapacity } from "./capacity-model";
 import {
+  arrivalBreaks,
+  arrivalWeight,
+  selectedDemand,
+} from "./arrival-distribution";
+import { demandDestination, validateServiceMapping } from "./integration-model";
+import {
   validateAssignmentConfig,
   type AssignmentConfig,
   type AssignmentDemand,
@@ -20,6 +26,20 @@ const close = (a: number, b: number) =>
   Math.abs(a - b) <= 1e-7 + 1e-12 * Math.max(Math.abs(a), Math.abs(b));
 const keyOf = (datasetId: string, timetableId: string, trainId: string) =>
   JSON.stringify([datasetId, timetableId, trainId]);
+export function expandJourney(index: RoutingIndex, j: Journey): Journey {
+  const full = structuredClone(j);
+  for (const leg of full.legs)
+    if (!leg.stops.length) {
+      const trip = index.trips.get(
+        keyOf(leg.datasetId, leg.timetableId, leg.trainId),
+      );
+      if (!trip) throw new Error("候補旅程の列車が索引にありません");
+      leg.stops = structuredClone(
+        trip.visits.slice(leg.boardIndex, leg.alightIndex + 1),
+      );
+    }
+  return full;
+}
 export function generalizedCost(
   j: Journey,
   arrival: number,
@@ -39,7 +59,7 @@ export function queryFor(
 ): RouteQuery {
   return {
     origin: { datasetId: row.datasetId, stationId: row.origin },
-    destination: { datasetId: row.datasetId, stationId: row.destination },
+    destination: demandDestination(row),
     mode: "depart",
     time,
     sort: "arrival",
@@ -47,7 +67,8 @@ export function queryFor(
     minimumTransferSeconds: config.minimumTransferSeconds,
     directOnly: config.maxTransfers === 0,
     candidateMode: "choices",
-    windowEnd: config.end + config.maxJourneySeconds,
+    compactProfile: true,
+    windowEnd: config.end + (row.accessSeconds ?? 0) + config.maxJourneySeconds,
   };
 }
 function validateInputs(
@@ -56,6 +77,8 @@ function validateInputs(
   config: AssignmentConfig,
 ) {
   validateAssignmentConfig(config);
+  if (index.selections.length > 1 || config.serviceMapping)
+    validateServiceMapping(config.serviceMapping!, index.selections);
   if (index.selections.some((s) => s.passengerOnly === false))
     throw new Error(
       "全列車の分析用インデックスでは旅客配分できません。営業列車だけのインデックスを作成してください",
@@ -65,7 +88,10 @@ function validateInputs(
       !r.datasetId ||
       !r.origin ||
       !r.destination ||
-      r.origin === r.destination ||
+      (r.origin === r.destination &&
+        (r.destinationDatasetId ?? r.datasetId) === r.datasetId) ||
+      (r.accessSeconds !== undefined &&
+        (!Number.isFinite(r.accessSeconds) || r.accessSeconds < 0)) ||
       !Number.isFinite(r.passengers) ||
       r.passengers < 0 ||
       !Number.isFinite(r.start) ||
@@ -116,14 +142,20 @@ export function assignDemand(
   input.forEach((r, i) => {
     const a = Math.max(config.start, r.start),
       b = Math.min(config.end, r.end);
-    const amount = b > a ? (r.passengers * (b - a)) / (r.end - r.start) : 0;
+    const amount = selectedDemand(r, config);
     result.totals.selected += amount;
     if (amount > 0) {
       if (config.integer && !Number.isInteger(amount))
         throw new Error(
           "整数配分には整数人数かつ時間枠に整合した対象窓が必要です。時間帯別ODを整数モードで再配分してください",
         );
-      const key = JSON.stringify([r.datasetId, r.origin, r.destination]),
+      const key = JSON.stringify([
+          r.datasetId,
+          r.origin,
+          r.destinationDatasetId ?? r.datasetId,
+          r.destination,
+          r.accessSeconds ?? 0,
+        ]),
         list = groups.get(key) ?? [];
       list.push(i);
       groups.set(key, list);
@@ -139,6 +171,8 @@ export function assignDemand(
     try {
       journeys = cachedProfile(index, queryFor(first, config, config.start));
       result.diagnostics.profiles++;
+      result.diagnostics.candidateJourneys =
+        (result.diagnostics.candidateJourneys ?? 0) + journeys.length;
     } catch (error) {
       profileError = (error as Error).message;
       result.diagnostics.warnings.push(
@@ -149,25 +183,29 @@ export function assignDemand(
       const row = input[demandIndex],
         start = Math.max(config.start, row.start),
         end = Math.min(config.end, row.end),
-        total = (row.passengers * (end - start)) / (row.end - row.start);
+        total = selectedDemand(row, config),
+        access = row.accessSeconds ?? 0;
       const relevant = journeys.filter(
         (j) =>
-          j.departure >= start &&
-          j.departure <= end + config.maxWaitSeconds &&
-          j.arrival <= end + config.maxJourneySeconds,
+          j.departure >= start + access &&
+          j.departure <= end + access + config.maxWaitSeconds &&
+          j.arrival <= end + access + config.maxJourneySeconds,
       );
       const boundaries = new Set([start, end]);
       for (const j of relevant)
         for (const t of [
-          j.departure,
-          j.departure - config.maxWaitSeconds,
-          j.arrival - config.maxJourneySeconds,
+          j.departure - access,
+          j.departure - access - config.maxWaitSeconds,
+          j.arrival - access - config.maxJourneySeconds,
         ])
           if (t > start && t < end) boundaries.add(t);
+      arrivalBreaks(row, start, end, boundaries, config);
       const points = [...boundaries].sort((a, b) => a - b),
         volumes = allocateVolume(
           total,
-          points.slice(1).map((b, i) => b - points[i]),
+          points
+            .slice(1)
+            .map((b, i) => arrivalWeight(row, points[i], b, config)),
           config.integer,
         );
       for (let i = 0; i < volumes.length; i++) {
@@ -175,7 +213,7 @@ export function assignDemand(
         if (amount === 0) continue;
         const a = points[i],
           b = points[i + 1],
-          arrival = (a + b) / 2,
+          arrival = (a + b) / 2 + access,
           cohort: ArrivalCohort = {
             id: `${demandIndex}:${i}`,
             demandIndex,
@@ -232,7 +270,8 @@ export function assignDemand(
           weightSum = sum(weights);
         choices.forEach((choice, i) => {
           if (!counts[i]) return;
-          result.journeys[choice.j.id] ??= structuredClone(choice.j);
+          if (!result.journeys[choice.j.id])
+            result.journeys[choice.j.id] = expandJourney(index, choice.j);
           result.allocations.push({
             cohortId: cohort.id,
             journeyId: choice.j.id,
@@ -357,8 +396,8 @@ export function validateAssignment(
       c.start < Math.max(r.start, result.config.start) ||
       c.end > Math.min(r.end, result.config.end) ||
       !(c.start < c.end) ||
-      c.arrival < c.start ||
-      c.arrival >= c.end ||
+      c.arrival < c.start + (r.accessSeconds ?? 0) ||
+      c.arrival >= c.end + (r.accessSeconds ?? 0) ||
       !Number.isFinite(c.passengers) ||
       c.passengers < 0
     )
@@ -371,7 +410,7 @@ export function validateAssignment(
       Math.min(r.end, result.config.end) -
         Math.max(r.start, result.config.start),
     );
-    if (!close(rowTotals[i], (r.passengers * overlap) / (r.end - r.start)))
+    if (!close(rowTotals[i], selectedDemand(r, result.config)))
       errors.push("OD行ごとの人数不一致");
   });
   for (const a of result.allocations) {

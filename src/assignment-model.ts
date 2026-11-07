@@ -2,6 +2,14 @@ import type { Purpose, Stop } from "./model";
 import type { TimedOD } from "./temporal-model";
 import type { Journey } from "./routing-model";
 import type { CapacityOutcome } from "./capacity-assignment";
+import {
+  validateArrivalModel,
+  type ArrivalModel,
+} from "./arrival-distribution";
+import {
+  validateServiceMapping,
+  type ServiceMapping,
+} from "./integration-model";
 export interface ChoiceCoefficients {
   riding: number;
   waiting: number;
@@ -10,6 +18,8 @@ export interface ChoiceCoefficients {
   scale: number;
 }
 export interface AssignmentConfig {
+  arrivalModel?: ArrivalModel;
+  serviceMapping?: ServiceMapping;
   capacityConstrained?: boolean;
   simulationEnd?: number;
   unknownCapacityPolicy?: "error" | "exclude";
@@ -26,6 +36,8 @@ export interface AssignmentConfig {
 }
 export interface AssignmentDemand extends TimedOD {
   datasetId: string;
+  destinationDatasetId?: string;
+  accessSeconds?: number;
 }
 export interface ArrivalCohort {
   id: string;
@@ -89,7 +101,12 @@ export interface AssignmentResult {
     unassigned: number;
     boardingEvents: number;
   };
-  diagnostics: { profiles: number; milliseconds: number; warnings: string[] };
+  diagnostics: {
+    profiles: number;
+    milliseconds: number;
+    warnings: string[];
+    candidateJourneys?: number;
+  };
 }
 export function defaultAssignmentConfig(): AssignmentConfig {
   return {
@@ -135,6 +152,8 @@ export function defaultAssignmentConfig(): AssignmentConfig {
   };
 }
 export function validateAssignmentConfig(c: AssignmentConfig) {
+  if (c?.arrivalModel) validateArrivalModel(c.arrivalModel);
+  if (c?.serviceMapping) validateServiceMapping(c.serviceMapping);
   const nonnegative = (n: number) => Number.isFinite(n) && n >= 0;
   if (
     !c ||

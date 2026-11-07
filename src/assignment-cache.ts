@@ -1,4 +1,8 @@
-import { journeyProfile, type RoutingIndex } from "./routing";
+import {
+  journeyProfile,
+  clearRoutingProfileCache,
+  type RoutingIndex,
+} from "./routing";
 import type { Journey, RouteQuery } from "./routing-model";
 interface Cache {
   entries: Map<string, { journeys: Journey[]; weight: number }>;
@@ -34,5 +38,6 @@ export function cachedProfile(index: RoutingIndex, q: RouteQuery) {
   return result;
 }
 export function clearAssignmentCache() {
+  clearRoutingProfileCache();
   profiles = new WeakMap();
 }

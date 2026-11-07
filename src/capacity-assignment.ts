@@ -19,8 +19,24 @@ import type {
   AssignmentResult,
   TrainLoad,
 } from "./assignment-model";
-export type PassengerState = "completed" | "inTransit" | "waiting" | "noPath";
+import {
+  assignIntegratedCapacity,
+  validateIntegratedCapacity,
+} from "./integrated-assignment";
+export type PassengerState =
+  "completed" | "inTransit" | "waiting" | "noPath" | "walking";
 export interface CapacityPacket {
+  datasetId?: string;
+  destinationDatasetId?: string;
+  walks?: {
+    from: import("./routing-model").StationRef;
+    to: import("./routing-model").StationRef;
+    start: number;
+    end: number;
+    linkIds: string[];
+    access?: boolean;
+  }[];
+  transferSeconds?: number;
   id: number;
   cohortId: string;
   passengers: number;
@@ -37,6 +53,8 @@ export interface CapacityPacket {
   reason?: string;
 }
 export interface CapacityEvent {
+  datasetId?: string;
+  eventId?: string;
   time: number;
   type: "board" | "alight" | "denied";
   packetId: number;
@@ -50,7 +68,7 @@ export interface CapacityEvent {
   additionalWaitPersonSeconds: number;
 }
 export interface CapacityOutcome {
-  version: 1;
+  version: 1 | 2;
   horizon: number;
   packets: CapacityPacket[];
   events: CapacityEvent[];
@@ -76,6 +94,13 @@ export function assignCapacity(
   config: AssignmentConfig,
   onProgress?: (n: number, total: number, stage?: "od" | "events") => void,
 ): AssignmentResult {
+  if (
+    index.selections.length > 1 ||
+    [...index.walks.values()].some((ws) => ws.some((w) => w.ids.length)) ||
+    config.arrivalModel?.mode === "minute" ||
+    input.some((r) => r.accessSeconds)
+  )
+    return assignIntegratedCapacity(index, input, config, onProgress);
   const started = performance.now();
   if (
     index.selections.length !== 1 ||
@@ -130,6 +155,7 @@ export function assignCapacity(
       inTransit: 0,
       waiting: 0,
       noPath: 0,
+      walking: 0,
       deniedEvents: 0,
       deniedUnique: 0,
       reassigned: 0,
@@ -466,6 +492,7 @@ export function validateCapacity(
   base: AssignmentResult,
   o: CapacityOutcome,
 ) {
+  if (o.version === 2) return validateIntegratedCapacity(index, base, o);
   const errors: string[] = [];
   const total = o.totals;
   if (

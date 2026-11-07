@@ -1,7 +1,9 @@
 import { validateProject, type Project } from "./model";
 import type { TransferLink } from "./routing-model";
 import { validateTransferLinks } from "./routing";
+import { validateIntegration, type IntegrationState } from "./network-model";
 export interface Workspace {
+  integration?: IntegrationState;
   schemaVersion: 1;
   projects: Project[];
   activeDatasetId: string;
@@ -42,4 +44,5 @@ export function validateWorkspace(w: Workspace) {
     w.transferLinks,
     w.projects.map((project) => ({ project, datasetId: project.datasetId! })),
   );
+  if (w.integration) validateIntegration(w.integration, w.projects);
 }

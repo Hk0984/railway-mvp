@@ -6,6 +6,9 @@ export interface StationRef {
 export const stationKey = (ref: StationRef) =>
   JSON.stringify([ref.datasetId, ref.stationId]);
 export interface TransferLink {
+  enabled?: boolean;
+  additionalTransferSeconds?: number;
+  restrictions?: string[];
   id: string;
   from: StationRef;
   to: StationRef;
@@ -22,6 +25,8 @@ export interface DatasetSelection {
   passengerOnly?: boolean;
 }
 export interface RouteQuery {
+  /** Internal candidate storage. Expand selected journeys before display or validation. */
+  compactProfile?: boolean;
   origin: StationRef;
   destination: StationRef;
   mode: "depart" | "arrive";

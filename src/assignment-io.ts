@@ -79,9 +79,19 @@ export function segmentLoadsCsv(r: AssignmentResult) {
   ]);
 }
 export function unallocatedCsv(r: AssignmentResult) {
+  const cohorts = new Map(r.cohorts.map((c) => [c.id, c]));
   if (r.capacity)
     return csv([
-      ["cohortId", "state", "stationId", "destination", "passengers", "reason"],
+      [
+        "cohortId",
+        "state",
+        "stationId",
+        "destination",
+        "passengers",
+        "reason",
+        "datasetId",
+        "destinationDatasetId",
+      ],
       ...r.capacity.packets
         .filter((p) => p.state !== "completed")
         .map((p) => [
@@ -91,9 +101,12 @@ export function unallocatedCsv(r: AssignmentResult) {
           p.destination,
           p.passengers,
           p.reason ?? "",
+          p.datasetId ??
+            r.input[cohorts.get(p.cohortId)!.demandIndex].datasetId,
+          p.destinationDatasetId ??
+            r.input[cohorts.get(p.cohortId)!.demandIndex].datasetId,
         ]),
     ]);
-  const cohorts = new Map(r.cohorts.map((c) => [c.id, c]));
   return csv([
     [
       "method",
@@ -107,6 +120,7 @@ export function unallocatedCsv(r: AssignmentResult) {
       "arrivalEnd",
       "passengers",
       "reason",
+      "destinationDatasetId",
     ],
     ...r.unallocated.map((a) => {
       const c = cohorts.get(a.cohortId)!,
@@ -123,6 +137,7 @@ export function unallocatedCsv(r: AssignmentResult) {
         c.end,
         a.passengers,
         a.reason,
+        d.destinationDatasetId ?? d.datasetId,
       ];
     }),
   ]);
@@ -142,6 +157,7 @@ export function allocationsCsv(r: AssignmentResult) {
         "scheduledAlightTime",
         "alightObserved",
         "stateAtHorizon",
+        "datasetId",
       ],
       ...r.capacity.packets.flatMap((p) =>
         p.history.map((l) => [
@@ -156,6 +172,7 @@ export function allocationsCsv(r: AssignmentResult) {
           l.arrival,
           l.arrival <= r.capacity!.horizon ? "yes" : "no",
           p.state,
+          l.datasetId,
         ]),
       ),
     ]);

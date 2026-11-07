@@ -3,6 +3,7 @@ import { cachedRoutingIndex } from "./routing-cache";
 import { assignDemand } from "./assignment";
 import { analyzeService } from "./service";
 import { classificationCounts } from "./classification";
+import { passengerFlows, flowSummary, compareBenefits } from "./flow-analysis";
 import type {
   AssignmentDemand,
   AssignmentConfig,
@@ -16,6 +17,7 @@ export interface ComparisonRow {
   unit: string;
 }
 export interface ComparisonResult {
+  benefits?: ReturnType<typeof compareBenefits>;
   beforeId: string;
   afterId: string;
   fixedDemand: boolean;
@@ -56,6 +58,7 @@ function metrics(
     l.peakOccupancy === null ? [] : [l.peakOccupancy * 100],
   );
   const counts = classificationCounts(p, diaId);
+  const flow = flowSummary(passengerFlows(result));
   return {
     result,
     values: [
@@ -76,8 +79,15 @@ function metrics(
       result.capacity
         ? result.capacity.totals.waiting +
           result.capacity.totals.noPath +
-          result.capacity.totals.inTransit
+          result.capacity.totals.inTransit +
+          result.capacity.totals.walking
         : result.totals.unassigned,
+      flow.meanWaitingSeconds === null ? null : flow.meanWaitingSeconds / 60,
+      flow.meanTravelSeconds === null ? null : flow.meanTravelSeconds / 60,
+      flow.waitingPersonSeconds / 60,
+      flow.travelPersonSeconds / 60,
+      flow.transferPassengers,
+      flow.excludedTimePassengers,
     ],
   };
 }
@@ -137,6 +147,12 @@ export function compareTimetables(
     ["後続便までの追加待ち", "人分"],
     ["輸送完了／無制約配分済み", "人"],
     ["未輸送／無制約未配分", "人"],
+    ["旅客平均待ち（輸送完了のみ）", "分"],
+    ["旅客平均所要（輸送完了のみ）", "分"],
+    ["旅客総待ち時間（輸送完了のみ）", "人分"],
+    ["総旅客時間（輸送完了のみ）", "人分"],
+    ["乗換を利用した旅客", "人"],
+    ["時間評価の対象外旅客", "人"],
   ];
   return {
     beforeId,
@@ -154,6 +170,7 @@ export function compareTimetables(
     })),
     before: a.result,
     after: b.result,
+    benefits: compareBenefits(a.result, b.result),
     assumptions: afterInput
       ? "同じダイヤ・異なる需要シナリオの比較。需要再推計型のダイヤ比較ではありません。"
       : "同じデータセットの駅ID・固定時間帯OD・配分条件で比較。営業区分は各ダイヤの実効設定を使用。運転間隔は有効出発機会、待ち時間は最速到着を選ぶ一様到着条件付き期待値。輸送完了は制約時の計算終了時点。",

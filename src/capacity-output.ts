@@ -1,4 +1,4 @@
-import { clock } from "./analysis";
+﻿import { clock } from "./analysis";
 import { csv } from "./io";
 import { escapeHtml as e, numberText as n, type UIContext } from "./ui-utils";
 import type { AssignmentResult, TrainLoad } from "./assignment-model";
@@ -194,7 +194,7 @@ export function renderCapacityComparison(results: AssignmentResult[]) {
     [
       "未配分／未輸送（待機・途中・経路なし）",
       a.totals.unassigned,
-      t.waiting + t.inTransit + t.noPath,
+      t.waiting + t.inTransit + t.noPath + (t.walking ?? 0),
     ],
     [
       "最大車内人数",
@@ -226,7 +226,10 @@ export function renderCapacityOutput(
     t = o.totals;
   const name = (id: string) =>
     ctx.project.stations.find((s) => s.id === id)?.name ?? id;
-  const rows = stationCapacityMetrics(r);
+  const hasWalking = r.capacity!.packets.some((p) =>
+    p.walks?.some((w) => !w.access),
+  );
+  const rows = hasWalking ? [] : stationCapacityMetrics(r);
   const loads = o.loads
     .filter((l) => !direction || l.direction === direction)
     .sort((a, b) => b.peakLoad - a.peakLoad);
@@ -237,6 +240,7 @@ export function renderCapacityOutput(
   return `<section id="capacity-result" class="panel"><h2>定員制約ありの輸送結果（推計）</h2><p class="notice">集計終端 ${clock(o.horizon)}。元の予定旅程をそのまま乗車実績とは扱いません。乗車できなかった部分だけを再探索します。積み残し実人数と、同じ旅客の再発を含む延べ回数を区別します。</p><div class="metrics">${[
     ["目的地へ輸送完了", t.completed],
     ["輸送途中", t.inTransit],
+    ["徒歩・アクセス中", t.walking ?? 0],
     ["駅で待機", t.waiting],
     ["経路なし", t.noPath],
     ["積み残し経験人数", t.deniedUnique],
@@ -244,7 +248,12 @@ export function renderCapacityOutput(
     ["対象需要", t.selected],
     [
       "人数収支差",
-      t.selected - t.completed - t.inTransit - t.waiting - t.noPath,
+      t.selected -
+        t.completed -
+        t.inTransit -
+        t.waiting -
+        t.noPath -
+        (t.walking ?? 0),
     ],
   ]
     .map(
@@ -262,5 +271,5 @@ export function renderCapacityOutput(
     )
     .join(
       "",
-    )}</div><h3>駅・時間帯別の乗車と積み残し</h3><div class="table-wrap"><table><thead><tr><th>駅</th><th>時間</th><th>乗車希望</th><th>実際の乗車</th><th>積み残し（延べ）</th><th>平均追加待ち</th><th>最大待機</th></tr></thead><tbody>${rows.map((s) => `<tr><td>${e(name(s.stationId))}</td><td>${s.hour}:00</td><td>${n(s.desired)}</td><td>${n(s.boarded)}</td><td>${n(s.denied)}</td><td>${s.reassigned ? n(s.extra / s.reassigned / 60) + "分" : "—"}</td><td>${n(s.peakWaiting)}</td></tr>`).join("")}</tbody></table></div><p class="muted">最大待機は到着枠代表時刻での駅別在庫推計。後続便への再配分人数・積み残し回数は乗車イベントです。輸送途中は終着後0に補正せず車内残数として保存します。計算 ${n(o.milliseconds / 1000, 2)}秒。</p><details><summary>警告 ${o.warnings.length}件</summary><ul>${o.warnings.map((w) => `<li>${e(w)}</li>`).join("")}</ul></details></section>${renderQueueCharts(r)}${picked ? detail(ctx, picked) : ""}`;
+    )}</div><h3>駅・時間帯別の乗車と積み残し</h3>${hasWalking ? '<p class="notice">徒歩を含む駅別の最大待機表はこの旧画面では未対応です。統合配分画面の旅客状態とOD内訳を確認してください。</p>' : ""}<div class="table-wrap"><table><thead><tr><th>駅</th><th>時間</th><th>乗車希望</th><th>実際の乗車</th><th>積み残し（延べ）</th><th>平均追加待ち</th><th>最大待機</th></tr></thead><tbody>${rows.map((s) => `<tr><td>${e(name(s.stationId))}</td><td>${s.hour}:00</td><td>${n(s.desired)}</td><td>${n(s.boarded)}</td><td>${n(s.denied)}</td><td>${s.reassigned ? n(s.extra / s.reassigned / 60) + "分" : "—"}</td><td>${n(s.peakWaiting)}</td></tr>`).join("")}</tbody></table></div><p class="muted">最大待機は到着枠代表時刻での駅別在庫推計。後続便への再配分人数・積み残し回数は乗車イベントです。輸送途中は終着後0に補正せず車内残数として保存します。計算 ${n(o.milliseconds / 1000, 2)}秒。</p><details><summary>警告 ${o.warnings.length}件</summary><ul>${o.warnings.map((w) => `<li>${e(w)}</li>`).join("")}</ul></details></section>${renderQueueCharts(r)}${picked ? detail(ctx, picked) : ""}`;
 }
