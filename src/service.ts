@@ -48,8 +48,8 @@ export function analyzeService(
       const dia = s.project.timetables.find((d) => d.id === s.timetableId)!;
       const filtered = {
         ...dia,
-        trains: dia.trains.filter(
-          (t) => !s.allowedTypeIds || s.allowedTypeIds.includes(t.typeId),
+        trains: dia.trains.filter((t) =>
+          index.trips.has(JSON.stringify([s.datasetId, s.timetableId, t.id])),
         ),
       };
       direct = directTrains(

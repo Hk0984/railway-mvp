@@ -18,6 +18,8 @@ export interface DatasetSelection {
   project: Project;
   timetableId: string;
   allowedTypeIds?: string[];
+  /** False is reserved for all-train analysis and historical regression, never passenger assignment. */
+  passengerOnly?: boolean;
 }
 export interface RouteQuery {
   origin: StationRef;
@@ -31,6 +33,8 @@ export interface RouteQuery {
   limit?: number;
   windowStart?: number;
   windowEnd?: number;
+  /** Keep departure/wait alternatives for explicit passenger-choice modelling. */
+  candidateMode?: "earliest" | "choices";
 }
 export interface JourneyLeg {
   datasetId: string;

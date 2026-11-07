@@ -1,12 +1,21 @@
 import type { Project, Demand } from "./model";
 import { trainVisits } from "./analysis";
-export function timetableCosts(p: Project, diaId: string) {
+import { isPassengerTrain } from "./classification";
+export function timetableCosts(
+  p: Project,
+  diaId: string,
+  passengerOnly = true,
+) {
   const dia = p.timetables.find((d) => d.id === diaId)!;
   const costs: Project["costs"] = {};
   for (const o of p.stations) costs[o.id] = {};
   // Enumerate actual visits once per train; do not run an OD frontier for each matrix cell.
   for (const train of dia.trains) {
-    if (train.cancelled) continue;
+    if (
+      train.cancelled ||
+      (passengerOnly && !isPassengerTrain(p, diaId, train))
+    )
+      continue;
     const visits = trainVisits(train);
     for (let i = 0; i < visits.length; i++) {
       const a = visits[i];

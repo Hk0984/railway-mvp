@@ -1,5 +1,6 @@
 import "./style.css";
 import "./journey.css";
+import "./assignment.css";
 import { validateProject, type Project, type Parameters } from "./model";
 import { sampleProject } from "./sample";
 import {
@@ -28,6 +29,17 @@ import {
   refreshRoute,
 } from "./routing-ui";
 import { renderTemporal, temporalClick, temporalChange } from "./temporal-ui";
+import {
+  renderClassification,
+  classClick,
+  classChange,
+} from "./classification-ui";
+import {
+  renderAssignment,
+  assignmentClick,
+  assignmentChange,
+} from "./assignment-ui";
+import { classificationCounts } from "./classification";
 import type { UIContext } from "./ui-utils";
 import {
   download,
@@ -64,8 +76,10 @@ const names = [
   "OD行列・出力",
   "経路検索",
   "時間帯別OD",
+  "営業区分・定員",
+  "旅客配分・混雑分析",
 ];
-const icons = ["▦", "⇅", "⌁", "◎", "↗", "▤", "⇢", "◷"];
+const icons = ["▦", "⇅", "⌁", "◎", "↗", "▤", "⇢", "◷", "◇", "▥"];
 function uiContext(): UIContext {
   return {
     project: p,
@@ -188,7 +202,7 @@ function dashboard() {
   const deps = stationDepartures(dia(), origin, "", "");
   const h = headways(deps);
   const total = p.demands.reduce((a, d) => a + d.passengers, 0);
-  return `<div class="hero"><div><span class="eyebrow">LOCAL RAILWAY INTELLIGENCE</span><h2>ダイヤと都市を、<br>数字でつなぐ。</h2><p>運行サービスと沿線の需要を、一つのワークスペースで。</p>${button("analyze", "ダイヤを分析する →", "primary")}</div><div class="route-art" aria-label="路線概略">${p.stations.map((s, i) => `<div><b>${String(i + 1).padStart(2, "0")}</b><i></i><span>${esc(s.name)}</span></div>`).join("")}</div></div><div class="metrics">${card("路線内の駅数", fmt(p.stations.length, 0), "駅", "駅IDでダイヤと都市データを連携")}${card("登録列車", fmt(dia().trains.length, 0), "本", esc(dia().name) + "・両方向")}${card("平均運転間隔", fmt(h?.mean), "分", esc(p.stations.find((s) => s.id === origin)!.name) + "・全方向／全種別・全時刻")}${card("登録OD需要", fmt(total, 0), "人", "推計・実測・手動はOD画面で区別")}</div><div class="two-col">${panel("時間帯別運行本数", "選択ダイヤ・全列車／最初の発時刻で集計", hourChart())}${panel("分析の進め方", "サンプルは架空の5駅・72列車です", `<ol class="steps"><li><b>ダイヤを確認</b><span>サンプルまたは対応ファイルを読み込み</span></li><li><b>沿線都市を設定</b><span>人口・雇用・学生・鉄道利用率を入力</span></li><li><b>OD需要を推計</b><span>係数と所要時間を設定し需要を生成</span></li></ol><div class="notice">経路検索・時間帯別ODを追加しました。列車配分・混雑率・改正比較は未対応です。</div>`)}</div>`;
+  return `<div class="hero"><div><span class="eyebrow">LOCAL RAILWAY INTELLIGENCE</span><h2>ダイヤと都市を、<br>数字でつなぐ。</h2><p>運行サービスと沿線の需要を、一つのワークスペースで。</p>${button("analyze", "ダイヤを分析する →", "primary")}</div><div class="route-art" aria-label="路線概略">${p.stations.map((s, i) => `<div><b>${String(i + 1).padStart(2, "0")}</b><i></i><span>${esc(s.name)}</span></div>`).join("")}</div></div><div class="metrics">${card("路線内の駅数", fmt(p.stations.length, 0), "駅", "駅IDでダイヤと都市データを連携")}${card("登録列車", fmt(dia().trains.length, 0), "本", esc(dia().name) + "・両方向")}${card("平均運転間隔", fmt(h?.mean), "分", esc(p.stations.find((s) => s.id === origin)!.name) + "・全方向／全種別・全時刻")}${card("登録OD需要", fmt(total, 0), "人", "推計・実測・手動はOD画面で区別")}</div><div class="two-col">${panel("時間帯別運行本数", "選択ダイヤ・全列車／最初の発時刻で集計", hourChart())}${panel("分析の進め方", "サンプルは架空の5駅・72列車です", `<ol class="steps"><li><b>ダイヤを確認</b><span>サンプルまたは対応ファイルを読み込み</span></li><li><b>沿線都市を設定</b><span>人口・雇用・学生・鉄道利用率を入力</span></li><li><b>OD需要を推計</b><span>係数と所要時間を設定し需要を生成</span></li></ol><div class="notice">経路検索・時間帯別ODを追加しました。旅客配分・混雑分析を追加しました。積み残し・改正比較は未対応です。</div>`)}</div>`;
 }
 function hourChart() {
   const bins = new Map<number, number>();
@@ -550,8 +564,17 @@ function matrix() {
   );
 }
 function render() {
-  app.innerHTML = `<aside><a class="brand" href="#"><span class="logo">R<span>↗</span></span><span>Railway Lab<small>ダイヤ・OD需要分析</small></span></a><div class="workspace-label">WORKSPACE</div><nav aria-label="メインメニュー">${names.map((n, i) => `<button data-page="${i}" class="${page === i ? "active" : ""}"><span>${icons[i]}</span>${n}</button>`).join("")}</nav><div class="sidebar-bottom"><span class="status-dot"></span> ブラウザ内で処理<small>MVP 0.2 / ローカル保存</small></div></aside><main><header><div><div class="breadcrumb">ワークスペース <span>/ ${names[page]}</span></div><h1>${names[page]}</h1></div><div class="project-select"><span class="tag green">ローカル</span>${select("diaId", esc(p.name), options(p.timetables, diaId))}</div></header>${message ? `<div class="notice" role="status">${esc(message)} ${button("dismiss", "閉じる")}</div>` : ""}${warnings.length ? `<details class="notice"><summary>読み込みの警告・制限 ${warnings.length}件（部分対応）</summary><ul>${warnings.map((w) => `<li>${esc(w)}</li>`).join("")}</ul></details>` : ""}${[dashboard, management, analysis, city, estimation, matrix, () => renderRouting(uiContext()), () => renderTemporal(uiContext())][page]()}<footer>Railway Lab · ブラウザ内の分析プロトタイプ <span>単位：時刻＝運行日基準 / 所要時間＝分 / 需要＝人</span></footer></main>`;
+  app.innerHTML = `<aside><a class="brand" href="#"><span class="logo">R<span>↗</span></span><span>Railway Lab<small>ダイヤ・OD需要分析</small></span></a><div class="workspace-label">WORKSPACE</div><nav aria-label="メインメニュー">${names.map((n, i) => `<button data-page="${i}" class="${page === i ? "active" : ""}"><span>${icons[i]}</span>${n}</button>`).join("")}</nav><div class="sidebar-bottom"><span class="status-dot"></span> ブラウザ内で処理<small>MVP 0.3 / ローカル保存</small></div></aside><main><header><div><div class="breadcrumb">ワークスペース <span>/ ${names[page]}</span></div><h1>${names[page]}</h1></div><div class="project-select"><span class="tag green">ローカル</span>${select("diaId", esc(p.name), options(p.timetables, diaId))}</div></header>${message ? `<div class="notice" role="status">${esc(message)} ${button("dismiss", "閉じる")}</div>` : ""}${warnings.length ? `<details class="notice"><summary>読み込みの警告・制限 ${warnings.length}件（部分対応）</summary><ul>${warnings.map((w) => `<li>${esc(w)}</li>`).join("")}</ul></details>` : ""}${[dashboard, management, analysis, city, estimation, matrix, () => renderRouting(uiContext()), () => renderTemporal(uiContext()), () => renderClassification(uiContext()), () => renderAssignment(uiContext())][page]()}<footer>Railway Lab · ブラウザ内の分析プロトタイプ <span>単位：時刻＝運行日基準 / 所要時間＝分 / 需要＝人</span></footer></main>`;
   refreshStorageNotice();
+  if (page === 0 || page === 2) {
+    const c = classificationCounts(p, diaId);
+    app
+      .querySelector("main > header")
+      ?.insertAdjacentHTML(
+        "afterend",
+        `<div class="classification-summary">選択ダイヤの全登録 ${c.registered}本 ／ 旅客が利用可能な営業 ${c.passenger}本 ／ 非営業 ${c.nonPassenger}本 ／ 要確認 ${c.review}本 ／ 運休 ${c.cancelled}本 <button data-page="8">分類を確認</button></div>`,
+      );
+  }
   if (p.oud2) {
     const route = app.querySelector(".route-art");
     route?.classList.add("station-list");
@@ -562,7 +585,12 @@ app.addEventListener("click", (event) => {
   const target = (event.target as HTMLElement).closest<HTMLElement>("button");
   if (!target) return;
   try {
-    if (routeClick(target, uiContext()) || temporalClick(target, uiContext()))
+    if (
+      routeClick(target, uiContext()) ||
+      temporalClick(target, uiContext()) ||
+      classClick(target, uiContext()) ||
+      assignmentClick(target, uiContext())
+    )
       return;
     if (target.dataset.page !== undefined) {
       page = Number(target.dataset.page);
@@ -638,6 +666,14 @@ app.addEventListener("click", (event) => {
 });
 app.addEventListener("change", async (event) => {
   const el = event.target as HTMLInputElement;
+  if (el.closest("#classification-page")) {
+    classChange(el, uiContext());
+    return;
+  }
+  if (el.closest("#assignment-page")) {
+    assignmentChange(el, uiContext());
+    return;
+  }
   if (el.closest("#route-page")) {
     routeChange(el, uiContext());
     return;

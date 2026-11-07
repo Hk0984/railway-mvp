@@ -109,6 +109,8 @@ try {
       .getByRole("status")
       .filter({ hasText: "基本データを取り込みました" })
       .waitFor();
+    await page.locator('[data-page="8"]').click();
+    await page.locator('[data-class-action="preset"]').click();
     await page.locator('[data-page="6"]').click();
     await page.locator("#route-sort").selectOption("arrival");
     await page.locator("#route-mode").selectOption("depart");
@@ -200,13 +202,11 @@ try {
         ],
       },
     ];
-    await page
-      .locator('[data-file="json"]')
-      .setInputFiles({
-        name: id + ".json",
-        mimeType: "application/json",
-        buffer: Buffer.from(JSON.stringify(synthetic)),
-      });
+    await page.locator('[data-file="json"]').setInputFiles({
+      name: id + ".json",
+      mimeType: "application/json",
+      buffer: Buffer.from(JSON.stringify(synthetic)),
+    });
     await page
       .getByRole("status")
       .filter({ hasText: id + ".json を読み込みました" })

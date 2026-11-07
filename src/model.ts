@@ -4,6 +4,14 @@ import {
   type TemporalState,
   type TemporalConfig,
 } from "./temporal-model";
+import {
+  validateClassifications,
+  type ServiceClassification,
+} from "./classification";
+import {
+  validateAssignmentConfig,
+  type AssignmentConfig,
+} from "./assignment-model";
 /** Time: seconds from service-day 00:00. Beyond 24:00 is explicit, never wrapped. */
 export type Direction = "down" | "up";
 export type Purpose = "commute" | "school" | "shopping" | "private";
@@ -96,6 +104,9 @@ export interface Parameters {
 export interface Project {
   schemaVersion: 1;
   datasetId?: string;
+  serviceClasses?: ServiceClassification;
+  typeCapacities?: Record<string, number>;
+  assignmentConfig?: AssignmentConfig;
   temporal?: TemporalState;
   temporalConfig?: TemporalConfig;
   name: string;
@@ -182,7 +193,9 @@ export function validateProject(value: unknown): asserts value is Project {
     fail("データセットID不正");
   if (p.temporal) validateTemporalState(p.temporal, ids);
   if (p.temporalConfig) validateTemporalConfig(p.temporalConfig);
+  if (p.assignmentConfig) validateAssignmentConfig(p.assignmentConfig);
   const typeIds = new Set(p.types.map((t) => t.id));
+  validateClassifications(p);
   if (
     typeIds.size !== p.types.length ||
     p.types.some((t) => !t.id || typeof t.name !== "string")

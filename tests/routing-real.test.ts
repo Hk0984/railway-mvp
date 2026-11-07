@@ -16,6 +16,11 @@ import {
 import { timetableCosts } from "../src/demand";
 import { compareODService } from "../src/od-service";
 import { analyzeService } from "../src/service";
+import {
+  applyReferenceClassification,
+  isPassengerTrain,
+} from "../src/classification";
+import { createHash } from "node:crypto";
 const base = new URL("./fixtures/real/", import.meta.url);
 for (const [file, origin, destination, branchOrigin, branchDestination] of [
   ["琴町線.oud2", "oud-s0", "oud-s23", "oud-s23", "oud-s31"],
@@ -33,6 +38,12 @@ for (const [file, origin, destination, branchOrigin, branchDestination] of [
       () => {
         const p = parseOud2(readFileSync(new URL(file, base), "utf8")).project;
         p.datasetId = "real";
+        applyReferenceClassification(
+          p,
+          createHash("sha256")
+            .update(readFileSync(new URL(file, base)))
+            .digest("hex"),
+        );
         p.temporal = generateTemporalDemand(
           p,
           defaultTemporalConfig(),
@@ -128,6 +139,7 @@ for (const [file, origin, destination, branchOrigin, branchDestination] of [
         expect(new Set(outcomes).size).toBeGreaterThan(1);
         const night = p.timetables.flatMap((d) =>
           d.trains.flatMap((t) => {
+            if (!isPassengerTrain(p, d.id, t)) return [];
             const visits = trainVisits(t);
             for (let i = 0; i < visits.length; i++) {
               const a = visits[i];

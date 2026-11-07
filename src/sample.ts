@@ -49,6 +49,19 @@ export function sampleProject(): Project {
   return {
     schemaVersion: 1,
     datasetId: "sample-mirai",
+    serviceClasses: {
+      types: {
+        local: {
+          state: "passenger",
+          basis: "架空サンプルで旅客営業と明示設定",
+        },
+        rapid: {
+          state: "passenger",
+          basis: "架空サンプルで旅客営業と明示設定",
+        },
+      },
+      trains: {},
+    },
     name: "みらい都市鉄道",
     stations,
     types: [

@@ -1,0 +1,583 @@
+﻿import { trainVisits } from "../../src/analysis";
+import type { Stop, Train } from "../../src/model";
+import {
+  stationKey,
+  type DatasetSelection,
+  type Journey,
+  type JourneyLeg,
+  type JourneyTransfer,
+  type RouteQuery,
+  type RouteSearchResult,
+  type StationRef,
+  type TransferLink,
+} from "../../src/routing-model";
+
+interface Trip {
+  selection: DatasetSelection;
+  train: Train;
+  visits: Stop[];
+  key: string;
+}
+interface Board {
+  trip: Trip;
+  index: number;
+  departure: number;
+}
+interface Ride {
+  trip: Trip;
+  i: number;
+  j: number;
+}
+interface Walk {
+  to: StationRef;
+  seconds: number;
+  ids: string[];
+}
+interface Label {
+  station: StationRef;
+  arrival: number;
+  departure: number;
+  riding: number;
+  walking: number;
+  rides: Ride[];
+  transfers: JourneyTransfer[];
+  signature: string;
+}
+export interface RoutingIndex {
+  selections: DatasetSelection[];
+  boards: Map<string, Board[]>;
+  trips: Map<string, Trip>;
+  stations: Set<string>;
+  walks: Map<string, Walk[]>;
+  warnings: string[];
+}
+const canBoard = (s: Stop) =>
+  s.status === "stop" && s.pickupAllowed !== false && s.departure !== undefined;
+const canAlight = (s: Stop) =>
+  s.status === "stop" && s.dropoffAllowed !== false && s.arrival !== undefined;
+const tripKey = (datasetId: string, dia: string, train: string) =>
+  JSON.stringify([datasetId, dia, train]);
+export function validateTransferLinks(
+  links: TransferLink[],
+  selections: Pick<DatasetSelection, "datasetId" | "project">[],
+) {
+  const stations = new Set(
+    selections.flatMap((s) =>
+      s.project.stations.map((t) =>
+        stationKey({ datasetId: s.datasetId, stationId: t.id }),
+      ),
+    ),
+  );
+  const ids = new Set<string>();
+  for (const l of links) {
+    if (
+      !l.id ||
+      ids.has(l.id) ||
+      !stations.has(stationKey(l.from)) ||
+      !stations.has(stationKey(l.to)) ||
+      stationKey(l.from) === stationKey(l.to) ||
+      !Number.isFinite(l.walkingSeconds) ||
+      l.walkingSeconds < 0 ||
+      !["forward", "both"].includes(l.direction) ||
+      typeof l.basis !== "string" ||
+      !l.basis.trim()
+    )
+      throw new Error("徒歩連絡のID・参照駅・方向・時間・設定根拠が不正です");
+    ids.add(l.id);
+  }
+}
+export function buildRoutingIndex(
+  selections: DatasetSelection[],
+  links: TransferLink[] = [],
+): RoutingIndex {
+  if (
+    !selections.length ||
+    new Set(selections.map((s) => s.datasetId)).size !== selections.length
+  )
+    throw new Error("データセットは重複なしで1件以上指定してください");
+  const boards = new Map<string, Board[]>(),
+    trips = new Map<string, Trip>(),
+    stations = new Set<string>(),
+    warnings = new Set<string>();
+  for (const selection of selections) {
+    const { datasetId, project, timetableId } = selection;
+    const dia = project.timetables.find((d) => d.id === timetableId);
+    if (!dia) throw new Error("指定ダイヤがありません");
+    project.stations.forEach((s) =>
+      stations.add(stationKey({ datasetId, stationId: s.id })),
+    );
+    if (
+      selection.allowedTypeIds?.some(
+        (id) => !project.types.some((t) => t.id === id),
+      )
+    )
+      throw new Error("対象種別IDが不正です");
+    for (const w of project.oud2?.warnings ?? [])
+      warnings.add(`${project.name}: ${w}`);
+    for (const train of dia.trains) {
+      if (
+        train.cancelled ||
+        (selection.allowedTypeIds &&
+          !selection.allowedTypeIds.includes(train.typeId))
+      )
+        continue;
+      const trip: Trip = {
+        selection,
+        train,
+        visits: trainVisits(train),
+        key: tripKey(datasetId, timetableId, train.id),
+      };
+      trips.set(trip.key, trip);
+      trip.visits.forEach((s, index) => {
+        if (!canBoard(s)) return;
+        const key = stationKey({ datasetId, stationId: s.stationId });
+        const list = boards.get(key) ?? [];
+        list.push({ trip, index, departure: s.departure! });
+        boards.set(key, list);
+      });
+    }
+  }
+  for (const list of boards.values())
+    list.sort(
+      (a, b) =>
+        a.departure - b.departure || a.trip.key.localeCompare(b.trip.key),
+    );
+  // Only explicitly configured links. Station names and legacy transfer strings create no edges.
+  validateTransferLinks(links, selections);
+  const edges = new Map<string, Walk[]>();
+  for (const l of links) {
+    const add = (from: StationRef, to: StationRef) => {
+      const key = stationKey(from),
+        a = edges.get(key) ?? [];
+      a.push({ to, seconds: l.walkingSeconds, ids: [l.id] });
+      edges.set(key, a);
+    };
+    add(l.from, l.to);
+    if (l.direction === "both") add(l.to, l.from);
+  }
+  const walks = new Map<string, Walk[]>();
+  for (const source of stations) {
+    const best = new Map<string, Walk>();
+    const initial = JSON.parse(source) as [string, string];
+    best.set(source, {
+      to: { datasetId: initial[0], stationId: initial[1] },
+      seconds: 0,
+      ids: [],
+    });
+    const settled = new Set<string>();
+    while (true) {
+      const next = [...best]
+        .filter(([k]) => !settled.has(k))
+        .sort((a, b) => a[1].seconds - b[1].seconds)[0];
+      if (!next) break;
+      const [key, walk] = next;
+      settled.add(key);
+      for (const e of edges.get(key) ?? []) {
+        const target = stationKey(e.to),
+          seconds = walk.seconds + e.seconds;
+        if (!best.has(target) || seconds < best.get(target)!.seconds)
+          best.set(target, { to: e.to, seconds, ids: [...walk.ids, ...e.ids] });
+      }
+    }
+    walks.set(source, [...best.values()]);
+  }
+  warnings.add(
+    "列車レコード間の直通継続は確定しません。別レコードへの乗継は最低乗換時間を適用します。路線外発着は表示情報のみです",
+  );
+  warnings.add(
+    "着時刻が欠ける駅での降車・乗換は生成しません。通過・運転停車（扱い2）で乗降しません。徒歩リンクは列車間の乗換に使用し、最初・最後の徒歩だけの移動は未対応です",
+  );
+  return {
+    selections,
+    boards,
+    trips,
+    stations,
+    walks,
+    warnings: [...warnings],
+  };
+}
+function lowerBound(boards: Board[], time: number) {
+  let lo = 0,
+    hi = boards.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1;
+    if (boards[mid].departure < time) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo;
+}
+// At the same station and boarding round these criteria preserve every future feasible extension.
+function dominates(a: Label, b: Label, riding = true) {
+  return (
+    (!riding || a.rides.at(-1)?.trip.key === b.rides.at(-1)?.trip.key) &&
+    a.arrival <= b.arrival &&
+    a.departure >= b.departure &&
+    (!riding || a.riding <= b.riding) &&
+    a.walking <= b.walking
+  );
+}
+function insert(map: Map<string, Label[]>, label: Label, riding = true) {
+  const key = stationKey(label.station),
+    list = map.get(key) ?? [];
+  if (list.some((old) => dominates(old, label, riding))) return false;
+  map.set(key, [
+    ...list.filter((old) => !dominates(label, old, riding)),
+    label,
+  ]);
+  return true;
+}
+function materialize(l: Label): Journey {
+  const legs: JourneyLeg[] = l.rides.map((r) => {
+    const { trip, i, j } = r;
+    const a = trip.visits[i],
+      b = trip.visits[j],
+      s = trip.selection;
+    return {
+      datasetId: s.datasetId,
+      timetableId: s.timetableId,
+      trainId: trip.train.id,
+      trainNumber: trip.train.number,
+      typeId: trip.train.typeId,
+      typeName: s.project.types.find((t) => t.id === trip.train.typeId)!.name,
+      origin: { datasetId: s.datasetId, stationId: a.stationId },
+      destination: { datasetId: s.datasetId, stationId: b.stationId },
+      departure: a.departure!,
+      arrival: b.arrival!,
+      boardIndex: i,
+      alightIndex: j,
+      stops: trip.visits.slice(i, j + 1).map((x) => ({ ...x })),
+    };
+  });
+  return {
+    id: l.signature,
+    departure: l.departure,
+    arrival: l.arrival,
+    elapsedSeconds: l.arrival - l.departure,
+    ridingSeconds: l.riding,
+    walkingSeconds: l.walking,
+    transferWaitSeconds: l.transfers.reduce((s, t) => s + t.waitingSeconds, 0),
+    transferCount: legs.length - 1,
+    legs,
+    transfers: l.transfers,
+    valid: true,
+  };
+}
+function checkQuery(index: RoutingIndex, q: RouteQuery) {
+  if (
+    !index.stations.has(stationKey(q.origin)) ||
+    !index.stations.has(stationKey(q.destination))
+  )
+    throw new Error("検索対象データセットに駅IDがありません");
+  if (
+    !Number.isFinite(q.time) ||
+    q.time < 0 ||
+    !Number.isInteger(q.maxTransfers) ||
+    q.maxTransfers < 0 ||
+    q.maxTransfers > 4 ||
+    !Number.isFinite(q.minimumTransferSeconds) ||
+    q.minimumTransferSeconds < 0 ||
+    !["depart", "arrive"].includes(q.mode) ||
+    !["arrival", "transfers", "riding"].includes(q.sort)
+  )
+    throw new Error("検索条件が不正です（乗換0〜4回、時間は非負の秒）");
+  if (
+    (q.windowStart !== undefined &&
+      (!Number.isFinite(q.windowStart) || q.windowStart < 0)) ||
+    (q.windowEnd !== undefined &&
+      (!Number.isFinite(q.windowEnd) || q.windowEnd < 0)) ||
+    (q.windowStart !== undefined &&
+      q.windowEnd !== undefined &&
+      q.windowEnd < q.windowStart)
+  )
+    throw new Error("検索時間範囲が不正です");
+}
+
+/** Boarding-round multi-label timetable search. This is not the optimized route-scanning RAPTOR.
+ * Each edge is an actual board/alight pair in ONE train record. No generated running times.
+ * Labels preserve arrival / first departure / riding / walking tradeoffs; rounds bound transfers.
+ * The finite supplied service day is searched, including later departures outside a reporting window. */
+export function journeyProfile(index: RoutingIndex, q: RouteQuery): Journey[] {
+  checkQuery(index, q);
+  if (stationKey(q.origin) === stationKey(q.destination)) return [];
+  const earliest =
+    q.mode === "depart"
+      ? Math.max(q.time, q.windowStart ?? 0)
+      : (q.windowStart ?? 0);
+  const latest =
+    q.mode === "arrive"
+      ? Math.min(q.time, q.windowEnd ?? Infinity)
+      : (q.windowEnd ?? Infinity);
+  let frontier = new Map<string, Label[]>([
+    [
+      stationKey(q.origin),
+      [
+        {
+          station: q.origin,
+          arrival: earliest,
+          departure: -Infinity,
+          riding: 0,
+          walking: 0,
+          rides: [],
+          transfers: [],
+          signature: "",
+        },
+      ],
+    ],
+  ]);
+  const finals: Label[] = [];
+  let work = 0;
+  const previousRounds = new Map<string, Label[]>();
+  const ridingCriterion = q.sort === "riding";
+  const maxBoardings = (q.directOnly ? 0 : q.maxTransfers) + 1;
+  for (let round = 1; round <= maxBoardings; round++) {
+    const next = new Map<string, Label[]>();
+    const boardingLabels = new Map<
+      string,
+      {
+        base: Label;
+        walk: Walk;
+        board: Board;
+        departure: number;
+        walking: number;
+      }[]
+    >();
+    for (const list of frontier.values())
+      for (const base of list) {
+        const targets =
+          round === 1
+            ? [{ to: base.station, seconds: 0, ids: [] }]
+            : (index.walks.get(stationKey(base.station)) ?? []);
+        for (const walk of targets) {
+          const boardList = index.boards.get(stationKey(walk.to)) ?? [];
+          const ready =
+            base.arrival +
+            walk.seconds +
+            (round === 1 ? 0 : q.minimumTransferSeconds);
+          for (
+            let bi = lowerBound(boardList, ready);
+            bi < boardList.length;
+            bi++
+          ) {
+            const board = boardList[bi];
+            if (board.departure > latest) break;
+            if (base.rides.at(-1)?.trip.key === board.trip.key) continue;
+            const departure = round === 1 ? board.departure : base.departure,
+              walking = base.walking + walk.seconds;
+            const key = JSON.stringify([board.trip.key, board.index]);
+            const list = boardingLabels.get(key) ?? [];
+            const better = (
+              a: { base: Label; departure: number; walking: number },
+              b: { base: Label; departure: number; walking: number },
+            ) =>
+              a.departure >= b.departure &&
+              (!ridingCriterion || a.base.riding <= b.base.riding) &&
+              a.walking <= b.walking;
+            const candidate = { base, walk, board, departure, walking };
+            if (!list.some((old) => better(old, candidate)))
+              boardingLabels.set(key, [
+                ...list.filter((old) => !better(candidate, old)),
+                candidate,
+              ]);
+          }
+        }
+      }
+    for (const list of boardingLabels.values())
+      for (const { base, walk, board } of list) {
+        for (let j = board.index + 1; j < board.trip.visits.length; j++) {
+          if (++work > 12000000)
+            throw new Error(
+              "経路候補の探索量上限に達しました。乗換回数・対象種別・データセットを絞ってください（不完全な結果は返しません）",
+            );
+          const stop = board.trip.visits[j];
+          if (
+            !canAlight(stop) ||
+            stop.arrival! < board.departure ||
+            stop.arrival! > latest
+          )
+            continue;
+          const station = {
+            datasetId: board.trip.selection.datasetId,
+            stationId: stop.stationId,
+          };
+          const transfer: JourneyTransfer = {
+            from: base.station,
+            to: walk.to,
+            arrival: base.arrival,
+            departure: board.departure,
+            walkingSeconds: walk.seconds,
+            waitingSeconds: board.departure - base.arrival - walk.seconds,
+            minimumSeconds: q.minimumTransferSeconds,
+            linkIds: walk.ids,
+          };
+          const label: Label = {
+            station,
+            arrival: stop.arrival!,
+            departure: round === 1 ? board.departure : base.departure,
+            riding: base.riding + stop.arrival! - board.departure,
+            walking: base.walking + walk.seconds,
+            rides: [...base.rides, { trip: board.trip, i: board.index, j }],
+            transfers: round === 1 ? [] : [...base.transfers, transfer],
+            signature:
+              base.signature +
+              JSON.stringify([board.trip.key, board.index, j, walk.ids]),
+          };
+          if (
+            !(previousRounds.get(stationKey(station)) ?? []).some((old) =>
+              dominates(old, label, ridingCriterion),
+            )
+          )
+            insert(next, label, ridingCriterion);
+        }
+      }
+    for (const [key, list] of next)
+      previousRounds.set(key, [...(previousRounds.get(key) ?? []), ...list]);
+    finals.push(...(next.get(stationKey(q.destination)) ?? []));
+    next.delete(stationKey(q.destination));
+    frontier = next;
+    if (!frontier.size) break;
+  }
+  const unique = new Map(finals.map((l) => [l.signature, l]));
+  const best: Label[] = [];
+  const finalDominates = (a: Label, b: Label) =>
+    a.arrival <= b.arrival &&
+    a.departure >= b.departure &&
+    a.rides.length <= b.rides.length &&
+    a.walking <= b.walking &&
+    (!ridingCriterion || a.riding <= b.riding);
+  for (const label of unique.values()) {
+    if (best.some((old) => finalDominates(old, label))) continue;
+    for (let i = best.length - 1; i >= 0; i--)
+      if (finalDominates(label, best[i])) best.splice(i, 1);
+    best.push(label);
+  }
+  return best.map(materialize);
+}
+export function searchJourneys(
+  index: RoutingIndex,
+  q: RouteQuery,
+): RouteSearchResult {
+  const all = journeyProfile(index, q);
+  const timeOrder = (a: Journey, b: Journey) =>
+    q.mode === "arrive"
+      ? b.departure - a.departure || a.arrival - b.arrival
+      : a.arrival - b.arrival || b.departure - a.departure;
+  const order = (a: Journey, b: Journey) =>
+    q.sort === "transfers"
+      ? a.transferCount - b.transferCount || timeOrder(a, b)
+      : q.sort === "riding"
+        ? a.ridingSeconds - b.ridingSeconds || timeOrder(a, b)
+        : q.mode === "arrive"
+          ? b.departure - a.departure ||
+            a.arrival - b.arrival ||
+            a.transferCount - b.transferCount
+          : a.arrival - b.arrival ||
+            b.departure - a.departure ||
+            a.transferCount - b.transferCount;
+  all.sort(order);
+  const limit = q.limit ?? 6;
+  if (!Number.isInteger(limit) || limit < 1)
+    throw new Error("表示件数は正の整数が必要です");
+  return {
+    journeys: all.slice(0, limit),
+    candidateCount: all.length,
+    warnings: index.warnings,
+    reason: all.length
+      ? undefined
+      : stationKey(q.origin) === stationKey(q.destination)
+        ? "発着が同じ駅です。移動は不要です"
+        : "明示着発時刻・対象種別・時間・乗換条件を満たす経路がありません。欠損着時刻、終便後、未設定の徒歩連絡も確認してください",
+    displayLimited: all.length > limit,
+  };
+}
+/** Independently checks every returned leg against the selected timetable and every transfer. */
+export function validateJourney(
+  index: RoutingIndex,
+  q: RouteQuery,
+  j: Journey,
+): string[] {
+  const errors: string[] = [];
+  if (!j.legs.length) return ["乗車区間なし"];
+  if (
+    j.departure !== j.legs[0].departure ||
+    j.arrival !== j.legs.at(-1)!.arrival
+  )
+    errors.push("旅程全体と区間の時刻不一致");
+  if (
+    stationKey(j.legs[0].origin) !== stationKey(q.origin) ||
+    stationKey(j.legs.at(-1)!.destination) !== stationKey(q.destination)
+  )
+    errors.push("発着ID不一致");
+  if (
+    (q.mode === "depart" && j.departure < q.time) ||
+    (q.mode === "arrive" && j.arrival > q.time)
+  )
+    errors.push("指定時刻違反");
+  if (
+    j.transferCount !== j.legs.length - 1 ||
+    j.transferCount > (q.directOnly ? 0 : q.maxTransfers) ||
+    j.transfers.length !== j.transferCount
+  )
+    errors.push("乗換数違反");
+  j.legs.forEach((leg, i) => {
+    const trip = index.trips.get(
+      tripKey(leg.datasetId, leg.timetableId, leg.trainId),
+    );
+    const a = trip?.visits[leg.boardIndex],
+      b = trip?.visits[leg.alightIndex];
+    if (
+      !trip ||
+      !a ||
+      !b ||
+      leg.alightIndex <= leg.boardIndex ||
+      !canBoard(a) ||
+      !canAlight(b) ||
+      leg.departure !== a.departure ||
+      leg.arrival !== b.arrival ||
+      leg.origin.stationId !== a.stationId ||
+      leg.destination.stationId !== b.stationId ||
+      leg.origin.datasetId !== leg.datasetId ||
+      leg.destination.datasetId !== leg.datasetId
+    )
+      errors.push(`区間${i + 1}の時刻・乗降不正`);
+    if (
+      trip &&
+      JSON.stringify(leg.stops) !==
+        JSON.stringify(trip.visits.slice(leg.boardIndex, leg.alightIndex + 1))
+    )
+      errors.push(`区間${i + 1}の途中駅情報不一致`);
+    if (i > 0) {
+      const previous = j.legs[i - 1],
+        t = j.transfers[i - 1];
+      const walk = index.walks
+        .get(stationKey(previous.destination))
+        ?.find((w) => stationKey(w.to) === stationKey(leg.origin));
+      if (
+        !t ||
+        !walk ||
+        t.walkingSeconds !== walk.seconds ||
+        t.arrival !== previous.arrival ||
+        t.departure !== leg.departure ||
+        stationKey(t.from) !== stationKey(previous.destination) ||
+        stationKey(t.to) !== stationKey(leg.origin) ||
+        leg.departure <
+          previous.arrival + walk.seconds + q.minimumTransferSeconds ||
+        t.waitingSeconds !== leg.departure - previous.arrival - walk.seconds
+      )
+        errors.push(`乗換${i}の時刻・徒歩連絡不正`);
+    }
+  });
+  if (
+    j.elapsedSeconds !== j.arrival - j.departure ||
+    j.ridingSeconds !==
+      j.legs.reduce((s, l) => s + l.arrival - l.departure, 0) ||
+    j.transferWaitSeconds !==
+      j.transfers.reduce((s, t) => s + t.waitingSeconds, 0) ||
+    j.walkingSeconds !==
+      j.transfers.reduce((s, t) => s + t.walkingSeconds, 0) ||
+    j.elapsedSeconds !==
+      j.ridingSeconds + j.transferWaitSeconds + j.walkingSeconds
+  )
+    errors.push("所要時間の内訳不一致");
+  return errors;
+}
+

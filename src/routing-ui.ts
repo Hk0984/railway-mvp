@@ -22,6 +22,7 @@ import {
   type UIContext,
 } from "./ui-utils";
 import { purposeLabels } from "./temporal-model";
+import { cachedRoutingIndex } from "./routing-cache";
 
 let active = "",
   origin: StationRef,
@@ -76,7 +77,12 @@ function selections(ctx: UIContext) {
 function getIndex(ctx: UIContext) {
   const list = selections(ctx);
   const key = JSON.stringify([
-    list.map((s) => [s.datasetId, s.timetableId, s.allowedTypeIds]),
+    list.map((s) => [
+      s.datasetId,
+      s.timetableId,
+      s.allowedTypeIds,
+      s.project.serviceClasses,
+    ]),
     ctx.links,
   ]);
   if (
@@ -86,7 +92,7 @@ function getIndex(ctx: UIContext) {
     cachedProjects.length !== list.length
   ) {
     const ids = new Set(list.map((s) => s.datasetId));
-    index = buildRoutingIndex(
+    index = cachedRoutingIndex(
       list,
       ctx.links.filter(
         (l) => ids.has(l.from.datasetId) && ids.has(l.to.datasetId),
@@ -234,7 +240,7 @@ export function renderRouting(ctx: UIContext) {
       label: `${s.name} ｜ ${p.name} ｜ D${ctx.projects.indexOf(p) + 1} / ${s.id}`,
     })),
   );
-  return `<div id="route-page"><section class="panel route-search"><div class="panel-heading"><span class="eyebrow">TIMETABLE JOURNEY PLANNER</span><h2>経路を検索する</h2><p>鉄道・バス共通。原データの着発時刻と、設定した乗換条件から検索します。</p></div><label>利用データセット<select id="route-dataset">${ctx.projects.map((p) => `<option value="${e(p.datasetId)}" ${p.datasetId === active ? "selected" : ""}>${e(p.name)}</option>`).join("")}</select></label><div class="journey-form"><label>出発駅・停留所<input id="route-origin" list="route-origin-list" value="${e(label(ctx, origin))}" autocomplete="off"><datalist id="route-origin-list">${rows.map((r) => `<option value="${e(r.label)}"></option>`).join("")}</datalist></label>${btn("swap", "⇄ 入替", "swap-button")}<label>到着駅・停留所<input id="route-destination" list="route-destination-list" value="${e(label(ctx, destination))}" autocomplete="off"><datalist id="route-destination-list">${rows.map((r) => `<option value="${e(r.label)}"></option>`).join("")}</datalist></label><label>時刻（24時以降も可）<input id="route-time" value="${e(time)}" inputmode="numeric"></label><label>指定方法<select id="route-mode"><option value="depart" ${mode === "depart" ? "selected" : ""}>出発時刻指定</option><option value="arrive" ${mode === "arrive" ? "selected" : ""}>到着時刻指定</option></select></label>${btn("search", "経路を検索", "primary")}</div><div class="route-options"><label>最大乗換回数<input id="route-maximum" type="number" min="0" max="4" step="1" value="${maximum}"></label><label>最低乗換時間（分）<input id="route-minimum" type="number" min="0" step="any" value="${minimum}"></label><label>経路条件<select id="route-direct"><option value="allow" ${!directOnly ? "selected" : ""}>乗換を許可</option><option value="direct" ${directOnly ? "selected" : ""}>直通のみ</option></select></label><label>並び替え<select id="route-sort"><option value="arrival" ${sort === "arrival" ? "selected" : ""}>時刻優先（早着 / 到着指定は遅発）</option><option value="transfers" ${sort === "transfers" ? "selected" : ""}>乗換が少ない</option><option value="riding" ${sort === "riding" ? "selected" : ""}>乗車時間が短い</option></select></label><label>検索範囲<select id="route-all"><option value="single" ${!useAll ? "selected" : ""}>選択データセットのみ</option><option value="all" ${useAll ? "selected" : ""}>読み込み済みを併用（徒歩設定が必要）</option></select></label></div><details><summary>使用ダイヤ・対象種別を確認</summary><p class="notice">営業・非営業を名前から判断しません。回送・試運転など乗客が利用できない種別はここで外してください。</p>${selections(
+  return `<div id="route-page"><section class="panel route-search"><div class="panel-heading"><span class="eyebrow">TIMETABLE JOURNEY PLANNER</span><h2>経路を検索する</h2><p>鉄道・バス共通。原データの着発時刻と、設定した乗換条件から検索します。</p></div><label>利用データセット<select id="route-dataset">${ctx.projects.map((p) => `<option value="${e(p.datasetId)}" ${p.datasetId === active ? "selected" : ""}>${e(p.name)}</option>`).join("")}</select></label><div class="journey-form"><label>出発駅・停留所<input id="route-origin" list="route-origin-list" value="${e(label(ctx, origin))}" autocomplete="off"><datalist id="route-origin-list">${rows.map((r) => `<option value="${e(r.label)}"></option>`).join("")}</datalist></label>${btn("swap", "⇄ 入替", "swap-button")}<label>到着駅・停留所<input id="route-destination" list="route-destination-list" value="${e(label(ctx, destination))}" autocomplete="off"><datalist id="route-destination-list">${rows.map((r) => `<option value="${e(r.label)}"></option>`).join("")}</datalist></label><label>時刻（24時以降も可）<input id="route-time" value="${e(time)}" inputmode="numeric"></label><label>指定方法<select id="route-mode"><option value="depart" ${mode === "depart" ? "selected" : ""}>出発時刻指定</option><option value="arrive" ${mode === "arrive" ? "selected" : ""}>到着時刻指定</option></select></label>${btn("search", "経路を検索", "primary")}</div><div class="route-options"><label>最大乗換回数<input id="route-maximum" type="number" min="0" max="4" step="1" value="${maximum}"></label><label>最低乗換時間（分）<input id="route-minimum" type="number" min="0" step="any" value="${minimum}"></label><label>経路条件<select id="route-direct"><option value="allow" ${!directOnly ? "selected" : ""}>乗換を許可</option><option value="direct" ${directOnly ? "selected" : ""}>直通のみ</option></select></label><label>並び替え<select id="route-sort"><option value="arrival" ${sort === "arrival" ? "selected" : ""}>時刻優先（早着 / 到着指定は遅発）</option><option value="transfers" ${sort === "transfers" ? "selected" : ""}>乗換が少ない</option><option value="riding" ${sort === "riding" ? "selected" : ""}>乗車時間が短い</option></select></label><label>検索範囲<select id="route-all"><option value="single" ${!useAll ? "selected" : ""}>選択データセットのみ</option><option value="all" ${useAll ? "selected" : ""}>読み込み済みを併用（徒歩設定が必要）</option></select></label></div><details><summary>使用ダイヤ・対象種別を確認</summary><p class="notice">「営業区分・定員」で営業と明示した列車だけを使用します。非営業・要確認は、この種別フィルターで選んでも検索されません。</p>${selections(
     ctx,
   )
     .map(

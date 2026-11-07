@@ -1,5 +1,6 @@
 import { trainVisits } from "./analysis";
 import type { Stop, Train } from "./model";
+import { isPassengerTrain, classificationCounts } from "./classification";
 import {
   stationKey,
   type DatasetSelection,
@@ -17,8 +18,11 @@ interface Trip {
   train: Train;
   visits: Stop[];
   key: string;
+  refs: StationRef[];
+  stationKeys: string[];
 }
 interface Board {
+  id: number;
   trip: Trip;
   index: number;
   departure: number;
@@ -34,14 +38,21 @@ interface Walk {
   ids: string[];
 }
 interface Label {
+  key: string;
   station: StationRef;
   arrival: number;
   departure: number;
   riding: number;
   walking: number;
-  rides: Ride[];
-  transfers: JourneyTransfer[];
-  signature: string;
+  path: PathNode | null;
+  depth: number;
+  firstTrip: string;
+}
+interface PathNode {
+  previous: PathNode | null;
+  ride: Ride;
+  transfer?: JourneyTransfer;
+  walkIds: string[];
 }
 export interface RoutingIndex {
   selections: DatasetSelection[];
@@ -99,6 +110,7 @@ export function buildRoutingIndex(
     trips = new Map<string, Trip>(),
     stations = new Set<string>(),
     warnings = new Set<string>();
+  let boardId = 0;
   for (const selection of selections) {
     const { datasetId, project, timetableId } = selection;
     const dia = project.timetables.find((d) => d.id === timetableId);
@@ -114,25 +126,40 @@ export function buildRoutingIndex(
       throw new Error("対象種別IDが不正です");
     for (const w of project.oud2?.warnings ?? [])
       warnings.add(`${project.name}: ${w}`);
+    if (selection.passengerOnly !== false) {
+      const c = classificationCounts(project, timetableId);
+      if (c.review || c.nonPassenger)
+        warnings.add(
+          `${project.name}: 非営業${c.nonPassenger}本・要確認${c.review}本を旅客検索から除外しています。営業区分画面で確認してください`,
+        );
+    }
+    const refs = new Map(
+      project.stations.map((s) => [s.id, { datasetId, stationId: s.id }]),
+    );
     for (const train of dia.trains) {
       if (
         train.cancelled ||
+        (selection.passengerOnly !== false &&
+          !isPassengerTrain(project, timetableId, train)) ||
         (selection.allowedTypeIds &&
           !selection.allowedTypeIds.includes(train.typeId))
       )
         continue;
+      const visits = trainVisits(train);
       const trip: Trip = {
         selection,
         train,
-        visits: trainVisits(train),
+        visits,
         key: tripKey(datasetId, timetableId, train.id),
+        refs: visits.map((s) => refs.get(s.stationId)!),
+        stationKeys: visits.map((s) => stationKey(refs.get(s.stationId)!)),
       };
       trips.set(trip.key, trip);
       trip.visits.forEach((s, index) => {
         if (!canBoard(s)) return;
-        const key = stationKey({ datasetId, stationId: s.stationId });
+        const key = trip.stationKeys[index];
         const list = boards.get(key) ?? [];
-        list.push({ trip, index, departure: s.departure! });
+        list.push({ id: boardId++, trip, index, departure: s.departure! });
         boards.set(key, list);
       });
     }
@@ -206,29 +233,62 @@ function lowerBound(boards: Board[], time: number) {
   }
   return lo;
 }
-// At the same station and boarding round these criteria preserve every future feasible extension.
-function dominates(a: Label, b: Label, riding = true) {
-  return (
-    (!riding || a.rides.at(-1)?.trip.key === b.rides.at(-1)?.trip.key) &&
+// Labels share immutable parent paths instead of copying complete journeys for every candidate.
+function chain(label: Label) {
+  const nodes: PathNode[] = [];
+  let p = label.path;
+  while (p) {
+    nodes.push(p);
+    p = p.previous;
+  }
+  return nodes.reverse();
+}
+function signature(label: Label) {
+  return chain(label)
+    .map((p) =>
+      JSON.stringify([p.ride.trip.key, p.ride.i, p.ride.j, p.walkIds]),
+    )
+    .join("");
+}
+function dominates(a: Label, b: Label, riding: boolean, choices = false) {
+  if (choices && (a.departure !== b.departure || a.firstTrip !== b.firstTrip))
+    return false;
+  if (riding && a.path?.ride.trip.key !== b.path?.ride.trip.key) return false;
+  const ok =
     a.arrival <= b.arrival &&
     a.departure >= b.departure &&
     (!riding || a.riding <= b.riding) &&
-    a.walking <= b.walking
+    a.walking <= b.walking;
+  if (!ok) return false;
+  if (!choices) return true;
+  const aw = a.arrival - a.departure - a.riding - a.walking,
+    bw = b.arrival - b.departure - b.riding - b.walking;
+  return (
+    aw <= bw &&
+    (a.arrival < b.arrival ||
+      a.riding < b.riding ||
+      a.walking < b.walking ||
+      aw < bw ||
+      a.depth < b.depth)
   );
 }
-function insert(map: Map<string, Label[]>, label: Label, riding = true) {
-  const key = stationKey(label.station),
-    list = map.get(key) ?? [];
-  if (list.some((old) => dominates(old, label, riding))) return false;
-  map.set(key, [
-    ...list.filter((old) => !dominates(label, old, riding)),
-    label,
-  ]);
+function insert(
+  map: Map<string, Label[]>,
+  label: Label,
+  riding: boolean,
+  choices: boolean,
+) {
+  const list = map.get(label.key) ?? [];
+  if (list.some((old) => dominates(old, label, riding, choices))) return false;
+  const kept = list.filter((old) => !dominates(label, old, riding, choices));
+  kept.push(label);
+  map.set(label.key, kept);
   return true;
 }
 function materialize(l: Label): Journey {
-  const legs: JourneyLeg[] = l.rides.map((r) => {
-    const { trip, i, j } = r;
+  const nodes = chain(l),
+    transfers = nodes.flatMap((n) => (n.transfer ? [n.transfer] : []));
+  const legs: JourneyLeg[] = nodes.map(({ ride: { trip, i, j } }) => {
     const a = trip.visits[i],
       b = trip.visits[j],
       s = trip.selection;
@@ -239,8 +299,8 @@ function materialize(l: Label): Journey {
       trainNumber: trip.train.number,
       typeId: trip.train.typeId,
       typeName: s.project.types.find((t) => t.id === trip.train.typeId)!.name,
-      origin: { datasetId: s.datasetId, stationId: a.stationId },
-      destination: { datasetId: s.datasetId, stationId: b.stationId },
+      origin: trip.refs[i],
+      destination: trip.refs[j],
       departure: a.departure!,
       arrival: b.arrival!,
       boardIndex: i,
@@ -249,16 +309,16 @@ function materialize(l: Label): Journey {
     };
   });
   return {
-    id: l.signature,
+    id: signature(l),
     departure: l.departure,
     arrival: l.arrival,
     elapsedSeconds: l.arrival - l.departure,
     ridingSeconds: l.riding,
     walkingSeconds: l.walking,
-    transferWaitSeconds: l.transfers.reduce((s, t) => s + t.waitingSeconds, 0),
-    transferCount: legs.length - 1,
+    transferWaitSeconds: transfers.reduce((s, t) => s + t.waitingSeconds, 0),
+    transferCount: l.depth - 1,
     legs,
-    transfers: l.transfers,
+    transfers,
     valid: true,
   };
 }
@@ -298,7 +358,9 @@ function checkQuery(index: RoutingIndex, q: RouteQuery) {
  * The finite supplied service day is searched, including later departures outside a reporting window. */
 export function journeyProfile(index: RoutingIndex, q: RouteQuery): Journey[] {
   checkQuery(index, q);
-  if (stationKey(q.origin) === stationKey(q.destination)) return [];
+  const originKey = stationKey(q.origin),
+    destinationKey = stationKey(q.destination);
+  if (originKey === destinationKey) return [];
   const earliest =
     q.mode === "depart"
       ? Math.max(q.time, q.windowStart ?? 0)
@@ -309,44 +371,63 @@ export function journeyProfile(index: RoutingIndex, q: RouteQuery): Journey[] {
       : (q.windowEnd ?? Infinity);
   let frontier = new Map<string, Label[]>([
     [
-      stationKey(q.origin),
+      originKey,
       [
         {
+          key: originKey,
           station: q.origin,
           arrival: earliest,
           departure: -Infinity,
           riding: 0,
           walking: 0,
-          rides: [],
-          transfers: [],
-          signature: "",
+          path: null,
+          depth: 0,
+          firstTrip: "",
         },
       ],
     ],
   ]);
-  const finals: Label[] = [];
+  const finals: Label[] = [],
+    previousRounds = new Map<string, Label[]>();
   let work = 0;
-  const previousRounds = new Map<string, Label[]>();
-  const ridingCriterion = q.sort === "riding";
-  const maxBoardings = (q.directOnly ? 0 : q.maxTransfers) + 1;
-  for (let round = 1; round <= maxBoardings; round++) {
-    const next = new Map<string, Label[]>();
-    const boardingLabels = new Map<
-      string,
-      {
-        base: Label;
-        walk: Walk;
-        board: Board;
-        departure: number;
-        walking: number;
-      }[]
-    >();
+  const choices = q.candidateMode === "choices",
+    ridingCriterion = q.sort === "riding" || choices;
+  type BoardingLabel = {
+    base: Label;
+    walk: Walk;
+    board: Board;
+    departure: number;
+    walking: number;
+    firstTrip: string;
+  };
+  const better = (a: BoardingLabel, b: BoardingLabel) => {
+    if (choices && (a.departure !== b.departure || a.firstTrip !== b.firstTrip))
+      return false;
+    const ok =
+      a.departure >= b.departure &&
+      (!ridingCriterion || a.base.riding <= b.base.riding) &&
+      a.walking <= b.walking;
+    if (!ok || !choices) return ok;
+    const aw = a.board.departure - a.departure - a.base.riding - a.walking,
+      bw = b.board.departure - b.departure - b.base.riding - b.walking;
+    return (
+      aw <= bw &&
+      (a.base.riding < b.base.riding || a.walking < b.walking || aw < bw)
+    );
+  };
+  for (
+    let round = 1;
+    round <= (q.directOnly ? 0 : q.maxTransfers) + 1;
+    round++
+  ) {
+    const next = new Map<string, Label[]>(),
+      boardingLabels = new Map<number, BoardingLabel[]>();
     for (const list of frontier.values())
       for (const base of list) {
         const targets =
           round === 1
             ? [{ to: base.station, seconds: 0, ids: [] }]
-            : (index.walks.get(stationKey(base.station)) ?? []);
+            : (index.walks.get(base.key) ?? []);
         for (const walk of targets) {
           const boardList = index.boards.get(stationKey(walk.to)) ?? [];
           const ready =
@@ -360,29 +441,25 @@ export function journeyProfile(index: RoutingIndex, q: RouteQuery): Journey[] {
           ) {
             const board = boardList[bi];
             if (board.departure > latest) break;
-            if (base.rides.at(-1)?.trip.key === board.trip.key) continue;
-            const departure = round === 1 ? board.departure : base.departure,
-              walking = base.walking + walk.seconds;
-            const key = JSON.stringify([board.trip.key, board.index]);
-            const list = boardingLabels.get(key) ?? [];
-            const better = (
-              a: { base: Label; departure: number; walking: number },
-              b: { base: Label; departure: number; walking: number },
-            ) =>
-              a.departure >= b.departure &&
-              (!ridingCriterion || a.base.riding <= b.base.riding) &&
-              a.walking <= b.walking;
-            const candidate = { base, walk, board, departure, walking };
-            if (!list.some((old) => better(old, candidate)))
-              boardingLabels.set(key, [
-                ...list.filter((old) => !better(candidate, old)),
-                candidate,
-              ]);
+            if (base.path?.ride.trip.key === board.trip.key) continue;
+            const candidate: BoardingLabel = {
+              base,
+              walk,
+              board,
+              departure: round === 1 ? board.departure : base.departure,
+              walking: base.walking + walk.seconds,
+              firstTrip: base.firstTrip || board.trip.key,
+            };
+            const labels = boardingLabels.get(board.id) ?? [];
+            if (labels.some((old) => better(old, candidate))) continue;
+            const kept = labels.filter((old) => !better(candidate, old));
+            kept.push(candidate);
+            boardingLabels.set(board.id, kept);
           }
         }
       }
     for (const list of boardingLabels.values())
-      for (const { base, walk, board } of list) {
+      for (const { base, walk, board, firstTrip } of list) {
         for (let j = board.index + 1; j < board.trip.visits.length; j++) {
           if (++work > 12000000)
             throw new Error(
@@ -395,55 +472,72 @@ export function journeyProfile(index: RoutingIndex, q: RouteQuery): Journey[] {
             stop.arrival! > latest
           )
             continue;
-          const station = {
-            datasetId: board.trip.selection.datasetId,
-            stationId: stop.stationId,
-          };
-          const transfer: JourneyTransfer = {
-            from: base.station,
-            to: walk.to,
-            arrival: base.arrival,
-            departure: board.departure,
-            walkingSeconds: walk.seconds,
-            waitingSeconds: board.departure - base.arrival - walk.seconds,
-            minimumSeconds: q.minimumTransferSeconds,
-            linkIds: walk.ids,
-          };
+          const key = board.trip.stationKeys[j],
+            station = board.trip.refs[j];
           const label: Label = {
+            key,
             station,
             arrival: stop.arrival!,
             departure: round === 1 ? board.departure : base.departure,
             riding: base.riding + stop.arrival! - board.departure,
             walking: base.walking + walk.seconds,
-            rides: [...base.rides, { trip: board.trip, i: board.index, j }],
-            transfers: round === 1 ? [] : [...base.transfers, transfer],
-            signature:
-              base.signature +
-              JSON.stringify([board.trip.key, board.index, j, walk.ids]),
+            depth: round,
+            firstTrip,
+            path: {
+              previous: base.path,
+              ride: { trip: board.trip, i: board.index, j },
+              walkIds: walk.ids,
+            },
           };
           if (
-            !(previousRounds.get(stationKey(station)) ?? []).some((old) =>
-              dominates(old, label, ridingCriterion),
+            (previousRounds.get(key) ?? []).some((old) =>
+              dominates(old, label, ridingCriterion, choices),
             )
           )
-            insert(next, label, ridingCriterion);
+            continue;
+          if (insert(next, label, ridingCriterion, choices) && round > 1)
+            label.path!.transfer = {
+              from: base.station,
+              to: walk.to,
+              arrival: base.arrival,
+              departure: board.departure,
+              walkingSeconds: walk.seconds,
+              waitingSeconds: board.departure - base.arrival - walk.seconds,
+              minimumSeconds: q.minimumTransferSeconds,
+              linkIds: walk.ids,
+            };
         }
       }
     for (const [key, list] of next)
       previousRounds.set(key, [...(previousRounds.get(key) ?? []), ...list]);
-    finals.push(...(next.get(stationKey(q.destination)) ?? []));
-    next.delete(stationKey(q.destination));
+    finals.push(...(next.get(destinationKey) ?? []));
+    next.delete(destinationKey);
     frontier = next;
     if (!frontier.size) break;
   }
-  const unique = new Map(finals.map((l) => [l.signature, l]));
+  const unique = new Map(finals.map((l) => [signature(l), l]));
   const best: Label[] = [];
-  const finalDominates = (a: Label, b: Label) =>
-    a.arrival <= b.arrival &&
-    a.departure >= b.departure &&
-    a.rides.length <= b.rides.length &&
-    a.walking <= b.walking &&
-    (!ridingCriterion || a.riding <= b.riding);
+  const finalDominates = (a: Label, b: Label) => {
+    if (choices && (a.departure !== b.departure || a.firstTrip !== b.firstTrip))
+      return false;
+    const ok =
+      a.arrival <= b.arrival &&
+      a.departure >= b.departure &&
+      a.depth <= b.depth &&
+      a.walking <= b.walking &&
+      (!ridingCriterion || a.riding <= b.riding);
+    if (!ok || !choices) return ok;
+    const aw = a.arrival - a.departure - a.riding - a.walking,
+      bw = b.arrival - b.departure - b.riding - b.walking;
+    return (
+      aw <= bw &&
+      (a.arrival < b.arrival ||
+        a.depth < b.depth ||
+        a.riding < b.riding ||
+        a.walking < b.walking ||
+        aw < bw)
+    );
+  };
   for (const label of unique.values()) {
     if (best.some((old) => finalDominates(old, label))) continue;
     for (let i = best.length - 1; i >= 0; i--)
