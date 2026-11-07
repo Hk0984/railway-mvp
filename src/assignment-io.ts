@@ -19,7 +19,7 @@ export function trainLoadsCsv(r: AssignmentResult) {
       "capacity",
       "peakOccupancy",
     ],
-    ...r.loads.map((l) => [
+    ...(r.capacity?.loads ?? r.loads).map((l) => [
       r.config.method,
       r.config.start,
       r.config.end,
@@ -57,7 +57,7 @@ export function segmentLoadsCsv(r: AssignmentResult) {
       "capacity",
       "occupancy",
     ],
-    ...r.loads.flatMap((l) =>
+    ...(r.capacity?.loads ?? r.loads).flatMap((l) =>
       l.stops.map((s, i) => [
         r.config.method,
         l.datasetId,
@@ -71,7 +71,7 @@ export function segmentLoadsCsv(r: AssignmentResult) {
         l.boardings[i],
         l.alightings[i],
         l.stops[i + 1]?.stationId ?? "",
-        l.segmentLoads[i] ?? 0,
+        l.segmentObserved?.[i] === false ? "" : (l.segmentLoads[i] ?? 0),
         l.capacity ?? "",
         l.occupancies[i] ?? "",
       ]),
@@ -79,6 +79,20 @@ export function segmentLoadsCsv(r: AssignmentResult) {
   ]);
 }
 export function unallocatedCsv(r: AssignmentResult) {
+  if (r.capacity)
+    return csv([
+      ["cohortId", "state", "stationId", "destination", "passengers", "reason"],
+      ...r.capacity.packets
+        .filter((p) => p.state !== "completed")
+        .map((p) => [
+          p.cohortId,
+          p.state,
+          p.stationId,
+          p.destination,
+          p.passengers,
+          p.reason ?? "",
+        ]),
+    ]);
   const cohorts = new Map(r.cohorts.map((c) => [c.id, c]));
   return csv([
     [
@@ -114,6 +128,37 @@ export function unallocatedCsv(r: AssignmentResult) {
   ]);
 }
 export function allocationsCsv(r: AssignmentResult) {
+  if (r.capacity)
+    return csv([
+      [
+        "packetId",
+        "cohortId",
+        "passengers",
+        "trainId",
+        "timetableId",
+        "origin",
+        "destination",
+        "boardTime",
+        "scheduledAlightTime",
+        "alightObserved",
+        "stateAtHorizon",
+      ],
+      ...r.capacity.packets.flatMap((p) =>
+        p.history.map((l) => [
+          p.id,
+          p.cohortId,
+          p.passengers,
+          l.trainId,
+          l.timetableId,
+          l.origin.stationId,
+          l.destination.stationId,
+          l.departure,
+          l.arrival,
+          l.arrival <= r.capacity!.horizon ? "yes" : "no",
+          p.state,
+        ]),
+      ),
+    ]);
   const cohorts = new Map(r.cohorts.map((c) => [c.id, c]));
   return csv([
     [

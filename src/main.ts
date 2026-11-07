@@ -1,4 +1,4 @@
-import "./style.css";
+﻿import "./style.css";
 import "./journey.css";
 import "./assignment.css";
 import { validateProject, type Project, type Parameters } from "./model";
@@ -39,6 +39,12 @@ import {
   assignmentClick,
   assignmentChange,
 } from "./assignment-ui";
+import {
+  renderAnalytics,
+  analyticsClick,
+  analyticsChange,
+  restoreAnalyticsForm,
+} from "./analytics-ui";
 import { classificationCounts } from "./classification";
 import type { UIContext } from "./ui-utils";
 import {
@@ -78,8 +84,9 @@ const names = [
   "時間帯別OD",
   "営業区分・定員",
   "旅客配分・混雑分析",
+  "需要校正・シナリオ・比較",
 ];
-const icons = ["▦", "⇅", "⌁", "◎", "↗", "▤", "⇢", "◷", "◇", "▥"];
+const icons = ["▦", "⇅", "⌁", "◎", "↗", "▤", "⇢", "◷", "◇", "▥", "◈"];
 function uiContext(): UIContext {
   return {
     project: p,
@@ -564,8 +571,9 @@ function matrix() {
   );
 }
 function render() {
-  app.innerHTML = `<aside><a class="brand" href="#"><span class="logo">R<span>↗</span></span><span>Railway Lab<small>ダイヤ・OD需要分析</small></span></a><div class="workspace-label">WORKSPACE</div><nav aria-label="メインメニュー">${names.map((n, i) => `<button data-page="${i}" class="${page === i ? "active" : ""}"><span>${icons[i]}</span>${n}</button>`).join("")}</nav><div class="sidebar-bottom"><span class="status-dot"></span> ブラウザ内で処理<small>MVP 0.3 / ローカル保存</small></div></aside><main><header><div><div class="breadcrumb">ワークスペース <span>/ ${names[page]}</span></div><h1>${names[page]}</h1></div><div class="project-select"><span class="tag green">ローカル</span>${select("diaId", esc(p.name), options(p.timetables, diaId))}</div></header>${message ? `<div class="notice" role="status">${esc(message)} ${button("dismiss", "閉じる")}</div>` : ""}${warnings.length ? `<details class="notice"><summary>読み込みの警告・制限 ${warnings.length}件（部分対応）</summary><ul>${warnings.map((w) => `<li>${esc(w)}</li>`).join("")}</ul></details>` : ""}${[dashboard, management, analysis, city, estimation, matrix, () => renderRouting(uiContext()), () => renderTemporal(uiContext()), () => renderClassification(uiContext()), () => renderAssignment(uiContext())][page]()}<footer>Railway Lab · ブラウザ内の分析プロトタイプ <span>単位：時刻＝運行日基準 / 所要時間＝分 / 需要＝人</span></footer></main>`;
+  app.innerHTML = `<aside><a class="brand" href="#"><span class="logo">R<span>↗</span></span><span>Railway Lab<small>ダイヤ・OD需要分析</small></span></a><div class="workspace-label">WORKSPACE</div><nav aria-label="メインメニュー">${names.map((n, i) => `<button data-page="${i}" class="${page === i ? "active" : ""}"><span>${icons[i]}</span>${n}</button>`).join("")}</nav><div class="sidebar-bottom"><span class="status-dot"></span> ブラウザ内で処理<small>MVP 0.4 / ローカル保存</small></div></aside><main><header><div><div class="breadcrumb">ワークスペース <span>/ ${names[page]}</span></div><h1>${names[page]}</h1></div><div class="project-select"><span class="tag green">ローカル</span>${select("diaId", esc(p.name), options(p.timetables, diaId))}</div></header>${message ? `<div class="notice" role="status">${esc(message)} ${button("dismiss", "閉じる")}</div>` : ""}${warnings.length ? `<details class="notice"><summary>読み込みの警告・制限 ${warnings.length}件（部分対応）</summary><ul>${warnings.map((w) => `<li>${esc(w)}</li>`).join("")}</ul></details>` : ""}${[dashboard, management, analysis, city, estimation, matrix, () => renderRouting(uiContext()), () => renderTemporal(uiContext()), () => renderClassification(uiContext()), () => renderAssignment(uiContext()), () => renderAnalytics(uiContext())][page]()}<footer>Railway Lab · ブラウザ内の分析プロトタイプ <span>単位：時刻＝運行日基準 / 所要時間＝分 / 需要＝人</span></footer></main>`;
   refreshStorageNotice();
+  if (page === 10) restoreAnalyticsForm();
   if (page === 0 || page === 2) {
     const c = classificationCounts(p, diaId);
     app
@@ -589,7 +597,8 @@ app.addEventListener("click", (event) => {
       routeClick(target, uiContext()) ||
       temporalClick(target, uiContext()) ||
       classClick(target, uiContext()) ||
-      assignmentClick(target, uiContext())
+      assignmentClick(target, uiContext()) ||
+      analyticsClick(target, uiContext())
     )
       return;
     if (target.dataset.page !== undefined) {
@@ -666,6 +675,10 @@ app.addEventListener("click", (event) => {
 });
 app.addEventListener("change", async (event) => {
   const el = event.target as HTMLInputElement;
+  if (el.closest("#analytics-page")) {
+    void analyticsChange(el, uiContext());
+    return;
+  }
   if (el.closest("#classification-page")) {
     classChange(el, uiContext());
     return;

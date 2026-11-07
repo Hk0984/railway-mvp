@@ -1,6 +1,7 @@
 import type { Purpose, Stop } from "./model";
 import type { TimedOD } from "./temporal-model";
 import type { Journey } from "./routing-model";
+import type { CapacityOutcome } from "./capacity-assignment";
 export interface ChoiceCoefficients {
   riding: number;
   waiting: number;
@@ -9,6 +10,9 @@ export interface ChoiceCoefficients {
   scale: number;
 }
 export interface AssignmentConfig {
+  capacityConstrained?: boolean;
+  simulationEnd?: number;
+  unknownCapacityPolicy?: "error" | "exclude";
   method: "fastest" | "logit";
   start: number;
   end: number;
@@ -56,6 +60,8 @@ export interface TrainLoad {
   boardings: number[];
   alightings: number[];
   segmentLoads: number[];
+  segmentObserved?: boolean[];
+  observedUntil?: number;
   totalBoardings: number;
   totalAlightings: number;
   uniquePassengers: number;
@@ -67,6 +73,7 @@ export interface TrainLoad {
   peakOccupancy: number | null;
 }
 export interface AssignmentResult {
+  capacity?: CapacityOutcome;
   config: AssignmentConfig;
   input: AssignmentDemand[];
   cohorts: ArrivalCohort[];
@@ -148,7 +155,13 @@ export function validateAssignmentConfig(c: AssignmentConfig) {
     c.maxChoices < 1 ||
     c.maxChoices > 30 ||
     typeof c.integer !== "boolean" ||
-    !c.coefficients
+    !c.coefficients ||
+    (c.capacityConstrained !== undefined &&
+      typeof c.capacityConstrained !== "boolean") ||
+    (c.simulationEnd !== undefined &&
+      (!nonnegative(c.simulationEnd) || c.simulationEnd < c.end)) ||
+    (c.unknownCapacityPolicy !== undefined &&
+      !["error", "exclude"].includes(c.unknownCapacityPolicy))
   )
     throw new Error("旅客配分条件が不正です");
   for (const purpose of ["commute", "school", "shopping", "private"] as const) {

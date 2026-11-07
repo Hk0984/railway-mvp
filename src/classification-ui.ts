@@ -10,6 +10,7 @@ import {
 } from "./classification";
 import { validateProject } from "./model";
 import { trainVisits, clock } from "./analysis";
+import { renderCapacityEditor, capacityEditorClick } from "./capacity-ui";
 import { invalidateRoutingCache } from "./routing-cache";
 import { escapeHtml as e, numberText as n, type UIContext } from "./ui-utils";
 let filter = "",
@@ -36,7 +37,7 @@ export function renderClassification(ctx: UIContext) {
   );
   page = Math.min(page, Math.max(0, Math.ceil(trains.length / 60) - 1));
   const start = page * 60;
-  return `<div id="classification-page"><section class="panel"><h2>営業区分を明示して、旅客に利用できる列車だけを選ぶ</h2><p class="muted">未設定は「要確認」です。非営業と要確認は、旅客検索・需要費用・配分から除外します。元のダイヤ・全列車分析は維持します。</p><div class="metrics">${[
+  return `<div id="classification-page">${renderCapacityEditor(ctx)}<section class="panel"><h2>営業区分を明示して、旅客に利用できる列車だけを選ぶ</h2><p class="muted">未設定は「要確認」です。非営業と要確認は、旅客検索・需要費用・配分から除外します。元のダイヤ・全列車分析は維持します。</p><div class="metrics">${[
     ["登録列車", c.registered],
     ["営業（運休除外）", c.passenger],
     ["非営業", c.nonPassenger],
@@ -69,6 +70,7 @@ export function renderClassification(ctx: UIContext) {
     .join("")}</tbody></table></div></section></div>`;
 }
 export function classClick(button: HTMLElement, ctx: UIContext) {
+  if (capacityEditorClick(button, ctx)) return true;
   const action = button.dataset.classAction;
   if (!action) return false;
   try {
@@ -92,6 +94,7 @@ export function classClick(button: HTMLElement, ctx: UIContext) {
   return true;
 }
 export function classChange(el: HTMLInputElement, ctx: UIContext) {
+  if (el.closest("#capacity-editor")) return;
   if (el.id === "class-filter") {
     filter = el.value;
     page = 0;

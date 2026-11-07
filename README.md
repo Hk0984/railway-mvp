@@ -1,10 +1,19 @@
-# Railway Lab — 鉄道ダイヤ／OD需要分析 MVP
+﻿# Railway Lab — 鉄道ダイヤ／OD需要分析 MVP
 
-**MVP 0.3：営業区分・旅客配分・混雑分析を追加しました。** 0.2の8画面・51件のテストを維持し、全10画面・70件のテストになりました。検索高速化、2方式の配分、列車乗降・区間人数の収支検証を実装しています。[配分仕様](docs/ASSIGNMENT.md)、[経路検索の設計](docs/ROUTING.md)、[時間帯需要の設計](docs/TEMPORAL_DEMAND.md)を参照してください。
+**MVP 0.4：定員制約・積み残し、需要校正、シナリオ・ダイヤ比較を追加しました。** 0.3の既存70件を維持し、全103件のテストが成功し、日本語UIは全11画面です。検索高速化、2方式の配分、列車乗降・区間人数の収支検証を実装しています。[配分仕様](docs/ASSIGNMENT.md)、[経路検索の設計](docs/ROUTING.md)、[時間帯需要の設計](docs/TEMPORAL_DEMAND.md)を参照してください。
 
 TypeScript + Vite の日本語Webアプリです。サーバー・DB・外部APIを使用せず、ブラウザ内で処理します。5駅・72列車の架空鉄道を同梱し、ファイルを用意しなくても分析できます。このフォルダーの外に既存アプリの変更は行っていません。GitHubへのpush・リモート作成・公開は行っていません。
 
-## 0.3の追加機能
+## 0.4の追加機能
+
+- 旅客配分で「定員制約あり／なし」を切替。降車後の空席・乗換駅での積み残し・後続便再探索・終了時点の需要状態を検証します。
+- 営業区分画面で、座席／輸送定員、根拠・車両、ダイヤ標準・個別設定を保存。
+- 「需要校正・シナリオ・比較」画面で実測CSV、IPF・係数格子探索、用途別誤差、3種類の需要モデル、シナリオ保存、固定需要のダイヤ比較に対応。
+- プロフィール・順位・検証の再利用、保持量を制限したキャッシュ、配分と比較のWorker・中止操作。
+
+**利用順**：営業区分・輸送定員を確認→時間帯需要を設定→旅客配分。実ファイルの都市属性・輸送定員・需要は推測補完しません。まず利用者が設定してください。詳細は [0.4計算仕様・制限](docs/MVP_0_4.md)。0.3保存コミットは `d50a551` です。従来JSONは新設定がなければ無制約のまま読み込めます。
+
+## 0.3で追加した機能（維持）
 
 9. **営業区分・定員**：種別ごとの営業／非営業／要確認と根拠、ダイヤ別・列車別の上書き、種別・個別定員。旧JSONは読み込めますが未設定種別は要確認です。提供2ファイルにはSHA-256一致を条件とする初期分類を用意し、利用者が明示適用します。
 10. **旅客配分・混雑分析**：保存済み時間帯需要を、最短所要時間または目的別係数付きロジットで配分。未配分需要を保持し、乗換を含む乗降・区間人数・最大区間・設定定員に対する混雑率、2方式比較、グラフ、4種CSVを表示します。すべて需要モデルに基づく推計です。
@@ -106,7 +115,12 @@ railway-mvp/
     assignment-model.ts / assignment.ts 独立した配分・収支検証
     assignment-worker.ts / assignment-ui.ts / assignment.css 配分Worker・画面
     assignment-io.ts 配分・列車・区間・未配分CSV
-    main.ts        10画面のUIと状態管理
+    capacity-model.ts / capacity-ui.ts 輸送・座席定員と根拠
+    capacity-assignment.ts / capacity-output.ts 時系列乗降・再探索・状態保存
+    assignment-cache.ts 上限付きプロフィールキャッシュ
+    calibration.ts / scenarios.ts 実測・IPF・係数探索・需要シナリオ
+    comparison.ts / comparison-worker.ts / analytics-ui.ts 比較ロジックと画面
+    main.ts        11画面のUIと状態管理
     style.css      PC/スマートフォン向けレイアウト
     journey.css    経路カード・縦型タイムライン
   public/samples/basic-1.07.oud2
@@ -118,6 +132,9 @@ railway-mvp/
   tests/routing.test.ts / routing-real.test.ts / routing-oracle.test.ts
   tests/temporal.test.ts / browser-routing.mjs
   tests/assignment.test.ts / assignment-real.test.ts / browser-assignment.mjs
+  tests/capacity.test.ts / capacity-real.test.ts / calibration.test.ts / comparison.test.ts
+  tests/assignment-performance.test.ts / browser-v04.mjs / helpers/assignment-v03.ts
+  vitest.config.ts 重い実ファイル試験を順次実行
   tests/classification.test.ts / performance.test.ts
   tests/helpers/routing-v02.ts 0.2保存実装との比較用
   tests/fixtures/real/ コピー2件・SHA-256記録（git対象外）
@@ -127,6 +144,7 @@ railway-mvp/
   docs/VALIDATION.md
   docs/REAL_FILES.md
   docs/ROUTING.md / TEMPORAL_DEMAND.md
+  docs/MVP_0_4.md 現行モデル・CSV・仮定・制限
   docs/ASSIGNMENT.md 0.3の分類・配分モデル・単位・制限
   vite.config.ts  検証成果物を監視対象から除外
   artifacts/       ローカル画面検証のスクリーンショット等（git対象外）
@@ -137,6 +155,6 @@ railway-mvp/
 
 0.2ではデータセットIDと駅IDの組で検索対象を識別します。旅程は列車ID・ダイヤID・乗降駅・明示着発・乗換関係を構造化して返します。TransferLinkは方向・徒歩秒数・設定根拠を持ち、UIで追加・削除できます。プロジェクトJSONに日間・時間帯需要を、**全データセットJSON**にライブラリ・徒歩連絡・各プロジェクトを保存できます。どちらも既存のJSON読込ボタンから読み込みます。ライブラリは圧縮してブラウザ内にも保存します。
 
-検索は登録された運行日内に限ります。翌日の便の自動繰り返し、路線外区間、別レコードを確定直通とする処理、運賃、容量制約・積み残しは未実装です。出発地・目的地に至る徒歩だけの移動は扱わず、徒歩リンクは列車間の乗換に使います。
+検索は登録された運行日内に限ります。翌日の便の自動繰り返し、路線外区間、別レコードを確定直通とする処理、運賃、徒歩連絡を含む容量配分は未実装です。出発地・目的地に至る徒歩だけの移動は扱わず、徒歩リンクは列車間の乗換に使います。
 
 検証手順と結果は [VALIDATION.md](docs/VALIDATION.md)、次の実装優先順位は [ROADMAP.md](docs/ROADMAP.md) を参照してください。

@@ -12,6 +12,11 @@ import {
   validateAssignmentConfig,
   type AssignmentConfig,
 } from "./assignment-model";
+import {
+  validateCapacitySettings,
+  type CapacitySettings,
+} from "./capacity-model";
+import { validateAnalytics, type AnalyticsState } from "./scenarios";
 /** Time: seconds from service-day 00:00. Beyond 24:00 is explicit, never wrapped. */
 export type Direction = "down" | "up";
 export type Purpose = "commute" | "school" | "shopping" | "private";
@@ -107,6 +112,8 @@ export interface Project {
   serviceClasses?: ServiceClassification;
   typeCapacities?: Record<string, number>;
   assignmentConfig?: AssignmentConfig;
+  capacitySettings?: CapacitySettings;
+  analytics?: AnalyticsState;
   temporal?: TemporalState;
   temporalConfig?: TemporalConfig;
   name: string;
@@ -196,6 +203,8 @@ export function validateProject(value: unknown): asserts value is Project {
   if (p.assignmentConfig) validateAssignmentConfig(p.assignmentConfig);
   const typeIds = new Set(p.types.map((t) => t.id));
   validateClassifications(p);
+  validateCapacitySettings(p);
+  validateAnalytics(p);
   if (
     typeIds.size !== p.types.length ||
     p.types.some((t) => !t.id || typeof t.name !== "string")

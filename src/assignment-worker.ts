@@ -10,6 +10,7 @@ self.onmessage = (
     input: AssignmentDemand[];
     config: AssignmentConfig;
     compare: boolean;
+    compareCapacity?: boolean;
   }>,
 ) => {
   try {
@@ -19,10 +20,22 @@ self.onmessage = (
       ? (["fastest", "logit"] as const)
       : [p.config.method];
     const results = [];
-    for (const method of modes)
+    const configs = p.compareCapacity
+      ? [
+          { ...p.config, capacityConstrained: false },
+          { ...p.config, capacityConstrained: true },
+        ]
+      : modes.map((method) => ({ ...p.config, method }));
+    for (const config of configs)
       results.push(
-        assignDemand(index, p.input, { ...p.config, method }, (done, total) =>
-          self.postMessage({ type: "progress", method, done, total }),
+        assignDemand(index, p.input, config, (done, total, stage) =>
+          self.postMessage({
+            type: "progress",
+            method: config.method,
+            done,
+            total,
+            stage,
+          }),
         ),
       );
     self.postMessage({ type: "result", results });
