@@ -66,9 +66,12 @@ async function run(compare = false) {
     .locator(`[data-assignment-action="${compare ? "compare" : "run"}"]`)
     .click();
   try {
-    await page.locator("#assignment-progress").filter({ hasText: "計算終了" }).waitFor({timeout:120000});
-  } catch(error) {
-    console.error(await page.locator('#assignment-page').innerText());
+    await page
+      .locator("#assignment-progress")
+      .filter({ hasText: "計算終了" })
+      .waitFor({ timeout: 120000 });
+  } catch (error) {
+    console.error(await page.locator("#assignment-page").innerText());
     throw error;
   }
   assert.equal(
@@ -174,6 +177,7 @@ try {
     );
   }
   await page.locator('[data-page="8"]').first().click();
+  await page.locator('[data-type-capacity-enable="local"]').check();
   await page.locator('[data-type-capacity="local"]').fill("25");
   await page.locator('[data-type-capacity="local"]').press("Tab");
   await run();
@@ -195,7 +199,7 @@ try {
   await page.setViewportSize({ width: 1440, height: 1050 });
   // Explicit per-train override, persisted with capacity and old JSON-compatible schema.
   await page.locator('[data-page="8"]').first().click();
-  await page.locator('[data-class-train="a"]').selectOption("nonPassenger");
+  await page.locator('[data-class-train="a"][value="nonPassenger"]').check();
   await run();
   assert.match(
     await page.locator("#assignment-page").innerText(),

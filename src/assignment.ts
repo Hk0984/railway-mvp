@@ -5,6 +5,7 @@ import { allocateVolume } from "./temporal-demand";
 import { cachedProfile } from "./assignment-cache";
 import { assignCapacity, validateCapacity } from "./capacity-assignment";
 import { transportCapacity, capacitySpec } from "./capacity-model";
+import { operationGroup } from "./operation-numbers";
 import {
   arrivalBreaks,
   arrivalWeight,
@@ -390,11 +391,16 @@ export function aggregateTrainLoads(
       peakSegments: [],
       capacity,
       capacitySource:
-        t.capacity !== undefined
+        p.capacitySettings?.trains[
+          JSON.stringify([trip.selection.timetableId, t.id])
+        ] || t.capacity !== undefined
           ? "train"
-          : p.typeCapacities?.[t.typeId] !== undefined
-            ? "type"
-            : "unknown",
+          : operationGroup(p, t).group &&
+              p.capacitySettings?.operationGroups?.[operationGroup(p, t).group!]
+            ? "operation"
+            : p.typeCapacities?.[t.typeId] !== undefined
+              ? "type"
+              : "unknown",
       occupancies: [],
       peakOccupancy: null,
     });

@@ -79,5 +79,21 @@ export function analyzeService(
         (a, b) => a.arrival - b.arrival || b.departure - a.departure,
       )[0] ?? null,
     journeys: departures,
+    replacedDirect: directWindow.flatMap((r) => {
+      const by = effective.find(
+        (j) => j.departure > r.departure && j.arrival <= r.arrival,
+      );
+      return by
+        ? [
+            {
+              trainId: r.train.id,
+              trainNumber: r.train.number,
+              departure: r.departure,
+              arrival: r.arrival,
+              replacement: by,
+            },
+          ]
+        : [];
+    }),
   };
 }

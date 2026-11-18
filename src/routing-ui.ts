@@ -1,3 +1,4 @@
+import { legPresentation } from "./route-presentation";
 import { clock } from "./analysis";
 import {
   buildRoutingIndex,
@@ -164,20 +165,22 @@ function run(ctx: UIContext) {
   }
 }
 function rideTimeline(ctx: UIContext, j: Journey) {
-  return `<ol class="journey-timeline">${j.legs
-    .map((leg, i) => {
-      const change = j.transfers[i - 1];
-      return `${change ? `<li class="transfer-event"><b>乗換 ${n((change.departure - change.arrival) / 60)}分</b><span>徒歩 ${n(change.walkingSeconds / 60)}分 ＋ 待ち ${n(change.waitingSeconds / 60)}分（最低 ${n(change.minimumSeconds / 60)}分）</span></li>` : ""}<li class="ride-event" style="--route-color:${["#087f71", "#d18b2c", "#6269ad", "#ba596c", "#3979a1"][i]}"><div class="timeline-station"><time>${clock(leg.departure)}</time><b>${e(stationName(ctx, leg.origin))}</b></div><div class="ride-line"><span class="train-badge">${e(leg.typeName)} ${e(leg.trainNumber || "番号なし")}</span><small>${e(ctx.projects.find((p) => p.datasetId === leg.datasetId)?.name)} / ${e(ctx.projects.find((p) => p.datasetId === leg.datasetId)?.timetables.find((d) => d.id === leg.timetableId)?.name)}</small><details><summary>途中 ${Math.max(0, leg.stops.length - 2)}駅・停留所</summary><ul>${leg.stops
-        .slice(1, -1)
-        .map(
-          (s) =>
-            `<li>${e(stationName(ctx, { datasetId: leg.datasetId, stationId: s.stationId }))}　${s.status === "pass" ? "通過・乗降不可" : `着 ${s.arrival === undefined ? "未記載" : clock(s.arrival)} / 発 ${s.departure === undefined ? "未記載" : clock(s.departure)}`}</li>`,
-        )
-        .join(
-          "",
-        )}</ul></details></div><div class="timeline-station"><time>${clock(leg.arrival)}</time><b>${e(stationName(ctx, leg.destination))}</b></div></li>`;
-    })
-    .join("")}</ol>`;
+  return (
+    '<ol class="journey-timeline">' +
+    j.legs
+      .map((leg, i) => {
+        const change = j.transfers[i - 1],
+          p = ctx.projects.find((p) => p.datasetId === leg.datasetId)!,
+          v = legPresentation(p, leg),
+          platform = (name: string | null) =>
+            name
+              ? `<span class="tag">${e(name)}</span>`
+              : "<small>番線情報なし</small>";
+        return `${change ? `<li class="transfer-event"><b>乗換 ${n((change.departure - change.arrival) / 60)}分</b><span>徒歩 ${n(change.walkingSeconds / 60)}分 ＋ 待ち ${n(change.waitingSeconds / 60)}分（最低 ${n(change.minimumSeconds / 60)}分）</span></li>` : ""}<li class="ride-event" style="--route-color:${["#087f71", "#d18b2c", "#6269ad", "#ba596c", "#3979a1"][i]}"><div class="timeline-station"><time>${clock(leg.departure)}</time><b>${e(stationName(ctx, leg.origin))}</b>${platform(v.departureTrack)}</div><div class="ride-line"><span class="train-badge">${e(leg.typeName)} / ${e(v.destination)}行</span><small>列車・便番号 ${e(leg.trainNumber || "未記載")}</small><details><summary>途中の停車 ${v.stops.length}駅・停留所</summary><ul>${v.stops.map((s) => `<li>${e(stationName(ctx, { datasetId: leg.datasetId, stationId: s.stationId }))}　着 ${s.arrival === undefined ? "未記載" : clock(s.arrival)} / 発 ${s.departure === undefined ? "未記載" : clock(s.departure)}${s.pickupAllowed === false && s.dropoffAllowed === false ? "（運転停車・乗降不可）" : ""}</li>`).join("")}</ul></details></div><div class="timeline-station"><time>${clock(leg.arrival)}</time><b>${e(stationName(ctx, leg.destination))}</b>${platform(v.arrivalTrack)}</div></li>`;
+      })
+      .join("") +
+    "</ol>"
+  );
 }
 function cards(ctx: UIContext) {
   if (!result)
@@ -188,7 +191,20 @@ function cards(ctx: UIContext) {
   return `${warningSummary}<p class="muted">${result.candidateCount}件の非劣位候補から${result.journeys.length}件を表示。${result.displayLimited ? "表示件数を制限しています。" : ""}到着指定の「時刻優先」は遅く出発できる順です。</p>${result.journeys
     .map(
       (j, i) =>
-        `<details class="journey-card" ${i === 0 ? "open" : ""}><summary><span class="route-number">${i + 1}</span><span class="journey-title"><strong>${clock(j.departure)} <span>→</span> ${clock(j.arrival)}</strong><small>${e(j.legs.map((l) => l.typeName).join(" → "))}</small></span><span class="journey-summary"><b>${n(j.elapsedSeconds / 60)}分</b><small>乗換 ${j.transferCount}回 / 乗車 ${n(j.ridingSeconds / 60)}分</small></span><span class="tag green">条件適合</span></summary><div class="journey-body"><p class="muted">乗換待ち ${n(j.transferWaitSeconds / 60)}分 / 徒歩 ${n(j.walkingSeconds / 60)}分。出発前の待ちは総所要時間に含みません。</p>${rideTimeline(ctx, j)}<details><summary>路線外発着情報</summary><p class="muted">検索は路線内のみ。${
+        `<details class="journey-card" ${i === 0 ? "open" : ""}><summary><span class="route-number">${i + 1}</span><span class="journey-title"><strong>${clock(j.departure)} <span>→</span> ${clock(j.arrival)}</strong><small>${e(
+          j.legs
+            .map(
+              (l) =>
+                l.typeName +
+                " / " +
+                legPresentation(
+                  ctx.projects.find((p) => p.datasetId === l.datasetId)!,
+                  l,
+                ).destination +
+                "行",
+            )
+            .join(" → "),
+        )}</small></span><span class="journey-summary"><b>${n(j.elapsedSeconds / 60)}分</b><small>乗換 ${j.transferCount}回 / 乗車 ${n(j.ridingSeconds / 60)}分</small></span><span class="tag green">条件適合</span></summary><div class="journey-body"><p class="muted">乗換待ち ${n(j.transferWaitSeconds / 60)}分 / 徒歩 ${n(j.walkingSeconds / 60)}分。出発前の待ちは総所要時間に含みません。</p>${rideTimeline(ctx, j)}<details><summary>路線外発着情報</summary><p class="muted">検索は路線内のみ。${
           j.legs
             .map((l) => {
               const p = ctx.projects.find((p) => p.datasetId === l.datasetId)!,

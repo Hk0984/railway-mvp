@@ -1,5 +1,6 @@
 import type { Project } from "./model";
 import { trainClassKey } from "./classification";
+import { operationGroup } from "./operation-numbers";
 export interface CapacitySpec {
   value: number;
   kind: "seats" | "transport";
@@ -7,6 +8,7 @@ export interface CapacitySpec {
   vehicle?: string;
 }
 export interface CapacitySettings {
+  operationGroups?: Record<string, CapacitySpec>;
   timetables: Record<string, CapacitySpec>;
   trains: Record<string, CapacitySpec>;
   types: Record<string, CapacitySpec>;
@@ -30,6 +32,9 @@ export function capacitySpec(
           kind: "transport",
           basis: "旧Train.capacityの設定輸送定員",
         }) ??
+    (operationGroup(p, train).group
+      ? c?.operationGroups?.[operationGroup(p, train).group!]
+      : undefined) ??
     c?.types[train.typeId] ??
     (p.typeCapacities?.[train.typeId] === undefined
       ? undefined
@@ -58,12 +63,17 @@ export function validateCapacitySettings(p: Project) {
     ),
     new Set(p.types.map((t) => t.id)),
   ];
-  for (const [i, map] of [c.timetables, c.trains, c.types].entries()) {
+  for (const [i, map] of [
+    c.timetables,
+    c.trains,
+    c.types,
+    c.operationGroups ?? {},
+  ].entries()) {
     if (!map || typeof map !== "object" || Array.isArray(map))
       throw new Error("定員設定の形式不正");
     for (const [key, s] of Object.entries(map))
       if (
-        !refs[i].has(key) ||
+        (i === 3 ? !/^[A-Z]+$/.test(key) : !refs[i].has(key)) ||
         !s ||
         !Number.isInteger(s.value) ||
         s.value <= 0 ||

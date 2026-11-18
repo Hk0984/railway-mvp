@@ -72,6 +72,7 @@ export interface StationOperation {
   raw: string;
 }
 export interface Train {
+  operationNumbers?: string[];
   id: string;
   number: string;
   typeId: string;
@@ -308,6 +309,12 @@ export function validateProject(value: unknown): asserts value is Project {
         t.externalDestination.boundaryTime > t.externalDestination.externalTime
       )
         fail("路線外終着の時刻逆転");
+      if (
+        t.operationNumbers !== undefined &&
+        (!Array.isArray(t.operationNumbers) ||
+          t.operationNumbers.some((v) => typeof v !== "string" || !v.trim()))
+      )
+        fail("運用番号の形式不正");
       for (const op of t.operations ?? [])
         if (
           !positions.has(op.positionId) ||

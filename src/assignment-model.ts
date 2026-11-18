@@ -83,7 +83,7 @@ export interface TrainLoad {
   peakLoad: number;
   peakSegments: number[];
   capacity: number | null;
-  capacitySource: "train" | "type" | "unknown";
+  capacitySource: "train" | "type" | "operation" | "unknown";
   occupancies: (number | null)[];
   peakOccupancy: number | null;
 }

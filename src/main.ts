@@ -1,6 +1,11 @@
-﻿import "./style.css";
+import "./style.css";
 import "./journey.css";
 import "./assignment.css";
+import {
+  renderAnalysisService,
+  analysisServiceChange,
+  analysisServiceClick,
+} from "./analysis-service-ui";
 import { validateProject, type Project, type Parameters } from "./model";
 import { sampleProject } from "./sample";
 import {
@@ -329,6 +334,30 @@ function importDetails() {
     }),
   )}`;
 }
+function analysisServiceInput() {
+  return {
+    project: {
+      ...p,
+      timetables: p.timetables.map((d) =>
+        d.id !== diaId
+          ? d
+          : {
+              ...d,
+              trains: d.trains.filter(
+                (t) =>
+                  (!direction || t.direction === direction) &&
+                  (!typeId || t.typeId === typeId),
+              ),
+            },
+      ),
+    },
+    timetableId: diaId,
+    origin,
+    destination,
+    start: start * 3600,
+    end: end * 3600,
+  };
+}
 function analysis() {
   const chosen = {
     ...dia(),
@@ -355,7 +384,8 @@ function analysis() {
     end > start ? expectedWait(rows, start * 3600, end * 3600) : null;
   return (
     filters() +
-    `<div class="metrics">${card("出発駅の発車本数", fmt(deps.length, 0), "本", "指定時間帯・停車のみ／終着は除外")}${card("OD直通 / 有効", displayed.length + " / " + displayed.filter((r) => r.effective).length, "本", "有効判定は時間窓外の後続列車も考慮")}${card("期待待ち時間", fmt(wait?.minutes), "分", "最速到着選択・利用可能時間に条件付け")}${card("利用可能な到着時間割合", fmt(wait ? wait.coverage * 100 : null), "%", "指定窓に一様に到着する旅客")}</div><div class="two-col">${panel("運転間隔", "指定駅・方向・種別・時間窓の発車時刻差。標準偏差は母標準偏差。", table(["平均", "中央値", "最大", "標準偏差"], [[fmt(h?.mean) + " 分", fmt(h?.median) + " 分", fmt(h?.max) + " 分", fmt(h?.sd) + " 分"]]))}${panel(
+    renderAnalysisService(analysisServiceInput()) +
+    `<div class="metrics">${card("出発駅の発車本数", fmt(deps.length, 0), "本", "指定時間帯・停車のみ／終着は除外")}${card("直通本数 / 直通内で有効", displayed.length + " / " + displayed.filter((r) => r.effective).length, "本", "有効判定は時間窓外の後続列車も考慮")}${card("直通の期待待ち時間", fmt(wait?.minutes), "分", "最速到着選択・利用可能時間に条件付け")}${card("直通の利用可能な到着時間割合", fmt(wait ? wait.coverage * 100 : null), "%", "指定窓に一様に到着する旅客")}</div><div class="two-col">${panel("運転間隔", "指定駅・方向・種別・時間窓の発車時刻差。標準偏差は母標準偏差。", table(["平均", "中央値", "最大", "標準偏差"], [[fmt(h?.mean) + " 分", fmt(h?.median) + " 分", fmt(h?.max) + " 分", fmt(h?.sd) + " 分"]]))}${panel(
       "駅別・方向別・種別別の発車本数",
       "指定時間帯。上部の方向・種別フィルターを適用。",
       table(
@@ -392,7 +422,7 @@ function analysis() {
       ),
     )}</div>${panel(
       "直通列車一覧",
-      "着発時刻が明示された停車駅間のみ。通過駅での乗降は扱いません。",
+      "直通列車間の比較です。乗換を含む有効本数は上段で分析します。着発時刻が明示された停車駅間のみ。",
       table(
         [
           "列車番号",
@@ -400,7 +430,7 @@ function analysis() {
           "出発",
           "到着",
           "所要時間",
-          "最速到着基準",
+          "直通列車間の最速到着基準",
           "路線外始発",
           "路線外終着",
         ],
@@ -410,7 +440,7 @@ function analysis() {
           clock(r.departure),
           clock(r.arrival),
           fmt((r.arrival - r.departure) / 60) + " 分",
-          `<span class="tag ${r.effective ? "green" : ""}">${r.effective ? "有効" : "後続が優位"}</span>`,
+          `<span class="tag ${r.effective ? "green" : ""}">${r.effective ? "直通内で有効" : "後発直通が優位"}</span>`,
           externalLabel(r.train, "origin"),
           externalLabel(r.train, "destination"),
         ]),
@@ -578,7 +608,7 @@ function matrix() {
   );
 }
 function render() {
-  app.innerHTML = `<aside><a class="brand" href="#"><span class="logo">R<span>↗</span></span><span>Railway Lab<small>ダイヤ・OD需要分析</small></span></a><div class="workspace-label">WORKSPACE</div><nav aria-label="メインメニュー">${names.map((n, i) => `<button data-page="${i}" class="${page === i ? "active" : ""}"><span>${icons[i]}</span>${n}</button>`).join("")}</nav><div class="sidebar-bottom"><span class="status-dot"></span> ブラウザ内で処理<small>MVP 0.6 / ローカル保存</small></div></aside><main><header><div><div class="breadcrumb">ワークスペース <span>/ ${names[page]}</span></div><h1>${names[page]}</h1></div><div class="project-select"><span class="tag green">ローカル</span>${select("diaId", esc(p.name), options(p.timetables, diaId))}</div></header>${message ? `<div class="notice" role="status">${esc(message)} ${button("dismiss", "閉じる")}</div>` : ""}${warnings.length ? `<details class="notice"><summary>読み込みの警告・制限 ${warnings.length}件（部分対応）</summary><ul>${warnings.map((w) => `<li>${esc(w)}</li>`).join("")}</ul></details>` : ""}${[dashboard, management, analysis, city, estimation, matrix, () => renderRouting(uiContext()), () => renderTemporal(uiContext()), () => renderClassification(uiContext()), () => renderAssignment(uiContext()), () => renderAnalytics(uiContext()), () => renderNetwork(uiContext())][page]()}<footer>Railway Lab · ブラウザ内の分析プロトタイプ <span>単位：時刻＝運行日基準 / 所要時間＝分 / 需要＝人</span></footer></main>`;
+  app.innerHTML = `<aside><a class="brand" href="#"><span class="logo">R<span>↗</span></span><span>Railway Lab<small>ダイヤ・OD需要分析</small></span></a><div class="workspace-label">WORKSPACE</div><nav aria-label="メインメニュー">${names.map((n, i) => `<button data-page="${i}" class="${page === i ? "active" : ""}"><span>${icons[i]}</span>${n}</button>`).join("")}</nav><div class="sidebar-bottom"><span class="status-dot"></span> ブラウザ内で処理<small>MVP 0.65 / ローカル保存</small></div></aside><main><header><div><div class="breadcrumb">ワークスペース <span>/ ${names[page]}</span></div><h1>${names[page]}</h1></div><div class="project-select"><span class="tag green">ローカル</span>${select("diaId", esc(p.name), options(p.timetables, diaId))}</div></header>${message ? `<div class="notice" role="status">${esc(message)} ${button("dismiss", "閉じる")}</div>` : ""}${warnings.length ? `<details class="notice"><summary>読み込みの警告・制限 ${warnings.length}件（部分対応）</summary><ul>${warnings.map((w) => `<li>${esc(w)}</li>`).join("")}</ul></details>` : ""}${[dashboard, management, analysis, city, estimation, matrix, () => renderRouting(uiContext()), () => renderTemporal(uiContext()), () => renderClassification(uiContext()), () => renderAssignment(uiContext()), () => renderAnalytics(uiContext()), () => renderNetwork(uiContext())][page]()}<footer>Railway Lab · ブラウザ内の分析プロトタイプ <span>単位：時刻＝運行日基準 / 所要時間＝分 / 需要＝人</span></footer></main>`;
   refreshStorageNotice();
   if (page === 11) restoreNetworkForm();
   if (page === 10) restoreAnalyticsForm();
@@ -602,6 +632,7 @@ app.addEventListener("click", (event) => {
   if (!target) return;
   try {
     if (
+      analysisServiceClick(target, analysisServiceInput(), render) ||
       routeClick(target, uiContext()) ||
       temporalClick(target, uiContext()) ||
       classClick(target, uiContext()) ||
@@ -684,6 +715,7 @@ app.addEventListener("click", (event) => {
 });
 app.addEventListener("change", async (event) => {
   const el = event.target as HTMLInputElement;
+  if (analysisServiceChange(el, render)) return;
   if (el.closest("#network-page")) {
     void networkChange(el, uiContext());
     return;
