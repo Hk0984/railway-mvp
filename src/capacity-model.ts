@@ -6,6 +6,7 @@ export interface CapacitySpec {
   kind: "seats" | "transport";
   basis: string;
   vehicle?: string;
+  carCount?: number;
 }
 export interface CapacitySettings {
   operationGroups?: Record<string, CapacitySpec>;
@@ -80,7 +81,8 @@ export function validateCapacitySettings(p: Project) {
         !["seats", "transport"].includes(s.kind) ||
         typeof s.basis !== "string" ||
         !s.basis.trim() ||
-        (s.vehicle !== undefined && typeof s.vehicle !== "string")
+        (s.vehicle !== undefined && typeof s.vehicle !== "string") ||
+        (s.carCount !== undefined && (!Number.isSafeInteger(s.carCount) || s.carCount <= 0))
       )
         throw new Error("定員設定の参照・種別・根拠が不正です");
   }

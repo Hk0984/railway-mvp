@@ -1,0 +1,63 @@
+.diagram-controls,
+.diagram-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem 1rem;
+  align-items: center;
+  margin: 0.65rem 0;
+}
+.diagram-controls label,
+.diagram-legend label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin: 0;
+}
+.diagram-legend input[type="number"] {
+  width: 5rem;
+}
+.diagram-legend input[type="color"] {
+  width: 2rem;
+  padding: 2px;
+}
+.diagram-scroll {
+  height: min(62vh, 650px);
+  min-height: 260px;
+  overflow: auto;
+  position: relative;
+  border: 1px solid #d7e2dd;
+  border-radius: 8px;
+  background: #fff;
+}
+.diagram-scroll canvas {
+  display: block;
+  position: sticky;
+  top: 0;
+  left: 0;
+  cursor: crosshair;
+}
+.diagram-scroll .diagram-size {
+  position: absolute;
+  inset: 0 auto auto 0;
+  pointer-events: none;
+}
+.diagram-details {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 250px), 1fr));
+  gap: 1rem;
+  margin-top: 1rem;
+}
+.diagram-details section {
+  padding: 0.75rem;
+  background: #f5f8f7;
+  border-radius: 6px;
+}
+.diagram-details h3,
+.diagram-details p {
+  margin: 0.25rem 0;
+}
+.diagram-details svg {
+  display: block;
+  width: 100%;
+  max-width: 480px;
+}
