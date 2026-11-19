@@ -2,8 +2,10 @@ import { trainVisits } from "./analysis";
 import type { DiagramAssignment, TrainLoad } from "./assignment-model";
 import type { Project, Stop, Train } from "./model";
 
+export const seatedCrowdingLimit = 40;
 export const crowdingLimits = [100, 130, 160, 200];
 export const crowdingColors = [
+  "#38bdf8",
   "#158c51",
   "#d7ab00",
   "#ed7c18",
@@ -16,8 +18,9 @@ export function crowdingBand(
   limits: readonly number[],
 ) {
   if (percent === null || !Number.isFinite(percent) || percent < 0) return -1;
+  if (percent < seatedCrowdingLimit) return 0;
   const index = limits.findIndex((limit) => percent <= limit);
-  return index < 0 ? limits.length : index;
+  return (index < 0 ? limits.length : index) + 1;
 }
 
 export interface DiagramTrain {

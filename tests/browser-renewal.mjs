@@ -46,6 +46,9 @@ try {
     );
   });
   await page.getByRole("link", { name: "混雑ダイヤ図" }).click();
+  const legend = page.locator('[aria-label="混雑率の凡例"]');
+  assert.match(await legend.innerText(), /40%未満 全員着席レベル/);
+  assert.match(await legend.innerText(), /40〜100% 比較的余裕あり/);
   const displayDirection = page.getByLabel("表示方向", { exact: true });
   const strokeWidth = page.getByRole("slider", { name: "スジ線の太さ" });
   assert.equal(await displayDirection.inputValue(), "all");
@@ -229,6 +232,32 @@ try {
   await page.locator("#diagram-train").selectOption("up-15");
   const peak = await page.locator("#diagram-train-detail").innerText();
   assert.match(peak, /最大混雑率 10%/);
+  await zoom.selectOption("160");
+  const lightBluePixels = () =>
+    canvas.evaluate(async (el) => {
+      await new Promise((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(resolve)),
+      );
+      const data = el
+        .getContext("2d")
+        .getImageData(0, 0, el.width, el.height).data;
+      let count = 0;
+      for (let i = 0; i < data.length; i += 4) {
+        if (
+          data[i + 3] > 40 &&
+          Math.abs(data[i] - 56) < 5 &&
+          Math.abs(data[i + 1] - 189) < 5 &&
+          Math.abs(data[i + 2] - 248) < 5
+        )
+          count++;
+      }
+      return count;
+    });
+  const haze = page.locator("#diagram-enabled");
+  await haze.check();
+  assert.ok((await lightBluePixels()) > 0, "low crowding draws light-blue haze");
+  await haze.uncheck();
+  assert.equal(await lightBluePixels(), 0);
   await page.getByRole("link", { name: "データ設定" }).click();
   await page.reload();
   assert.equal(await cap.inputValue(), "10");

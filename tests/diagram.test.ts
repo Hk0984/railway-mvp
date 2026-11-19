@@ -16,6 +16,8 @@ describe("列車ダイヤ図", () => {
     expect(
       [
         0,
+        39.99,
+        40,
         100,
         100.01,
         130,
@@ -28,8 +30,8 @@ describe("列車ダイヤ図", () => {
         NaN,
         -1,
       ].map((v) => crowdingBand(v, crowdingLimits)),
-    ).toEqual([0, 0, 1, 1, 2, 2, 3, 3, 4, -1, -1, -1]);
-    expect(crowdingBand(100, [90, 130, 160, 200])).toBe(1);
+    ).toEqual([0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, -1, -1, -1]);
+    expect(crowdingBand(100, [90, 130, 160, 200])).toBe(2);
   });
 
   it("uses assignment loads after departures, including passes, and leaves dwell and excluded segments uncolored", () => {
@@ -100,7 +102,7 @@ describe("列車ダイヤ図", () => {
     ]);
     expect(lines.map((s) => s.passengers)).toEqual([65, null, 115, 115]);
     expect(lines.map((s) => crowdingBand(s.percent, crowdingLimits))).toEqual([
-      0, -1, 1, 1,
+      1, -1, 2, 2,
     ]);
     expect(
       diagramTrains(p, diaId)[0].segments.every((s) => s.percent === null),
@@ -265,7 +267,7 @@ describe("列車ダイヤ図", () => {
     );
     const segment = diagramTrains(project, timetableId, result)[0].segments[0];
     expect(segment.passengers).toBe(158);
-    expect(crowdingBand(segment.percent, crowdingLimits)).toBe(2);
+    expect(crowdingBand(segment.percent, crowdingLimits)).toBe(3);
   });
 
   it("merges explicit branch aliases without merging a later visit during a reversal", () => {

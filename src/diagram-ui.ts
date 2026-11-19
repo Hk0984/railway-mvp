@@ -7,6 +7,7 @@ import {
   crowdingColors,
   crowdingLimits,
   diagramTrains,
+  seatedCrowdingLimit,
   type DiagramSegment,
   type DiagramTrain,
 } from "./diagram-model";
@@ -27,6 +28,7 @@ import { escapeHtml as e, numberText as n } from "./ui-utils";
 const routeSelection = new WeakMap<Project, number>();
 const storageKey = "railway-lab.diagram-haze";
 const bandLabels = [
+  "全員着席レベル",
   "比較的余裕あり",
   "やや混雑",
   "混雑",
@@ -51,7 +53,8 @@ const defaultSettings: DiagramSettings = {
 };
 function validLimits(limits: number[]) {
   return (
-    limits.length === 4 &&
+    limits.length === crowdingLimits.length &&
+    limits[0] >= seatedCrowdingLimit &&
     limits.every((v, i) => Number.isFinite(v) && v > (limits[i - 1] ?? 0))
   );
 }
@@ -80,15 +83,20 @@ function readSettings(): DiagramSettings {
       saved.opacity >= 0 &&
       saved.opacity <= 0.85 &&
       Array.isArray(saved.limits) &&
-      validLimits(saved.limits) &&
       Array.isArray(saved.colors) &&
-      saved.colors.length === 5 &&
+      (saved.colors.length === crowdingColors.length ||
+        saved.colors.length === crowdingColors.length - 1) &&
       saved.colors.every(
         (v: unknown) => typeof v === "string" && /^#[a-f\d]{6}$/i.test(v),
       )
     )
       return {
         ...saved,
+        limits: validLimits(saved.limits) ? saved.limits : defaults.limits,
+        colors:
+          saved.colors.length === crowdingColors.length
+            ? saved.colors
+            : [crowdingColors[0], ...saved.colors],
         direction: displayDirection(saved.direction),
         lineWidth: validLineWidth(saved.lineWidth)
           ? saved.lineWidth
@@ -181,7 +189,11 @@ export function mountDiagram(
       compact
         ? ""
         : `<details><summary>色としきい値を変更（段階式・アプリ独自の区分）</summary>
-      <div class="diagram-legend">${bandLabels.map((label, i) => `<label>${label}<input type="color" aria-label="${label}の色" data-haze-color="${i}" value="${settings.colors[i]}">${i < 4 ? `<input type="number" min="1" step="any" aria-label="${label}の上限（%）" data-haze-limit="${i}" value="${settings.limits[i]}">%` : ""}</label>`).join("")}</div>
+      <div class="diagram-legend">${bandLabels.map((label, i) => {
+        const limitIndex = i - 1;
+        const limit = settings.limits[limitIndex];
+        return `<label>${label}<input type="color" aria-label="${label}の色" data-haze-color="${i}" value="${settings.colors[i]}">${limit === undefined ? "" : `<input type="number" min="${seatedCrowdingLimit}" step="any" aria-label="${label}の上限（%）" data-haze-limit="${limitIndex}" value="${limit}">%`}</label>`;
+      }).join("")}</div>
       <p id="diagram-setting-error" role="status"></p>
     </details>`
     }
@@ -460,9 +472,12 @@ export function mountDiagram(
   function legend() {
     find(".diagram-legend").innerHTML = bandLabels
       .map((label, i) => {
-        const low = i ? settings.limits[i - 1] : 0;
-        const high = settings.limits[i];
-        return `<span><span aria-hidden="true" style="color:${settings.colors[i]}">●</span> ${i === 0 ? "0〜" + high + "%" : low + "%超" + (high === undefined ? "" : "〜" + high + "%")} ${label}</span>`;
+        const high = settings.limits[i - 1];
+        const range =
+          i === 0 ? `${seatedCrowdingLimit}%未満`
+          : i === 1 ? `${seatedCrowdingLimit}〜${high}%`
+          : `${settings.limits[i - 2]}%超${high === undefined ? "" : `〜${high}%`}`;
+        return `<span><span aria-hidden="true" style="color:${settings.colors[i]}">●</span> ${range} ${label}</span>`;
       })
       .join("");
   }
@@ -554,7 +569,7 @@ export function mountDiagram(
       message.textContent = "";
     } else
       message.textContent =
-        "しきい値は正の数を小さい順に入力してください。直前の値を表示中です。";
+        `しきい値は${seatedCrowdingLimit}%以上の数を小さい順に入力してください。直前の値を表示中です。`;
     settings.opacity = find<HTMLInputElement>("#diagram-opacity").valueAsNumber;
     settings.width = find<HTMLInputElement>("#diagram-width").valueAsNumber;
     settings.selectedOnly =
