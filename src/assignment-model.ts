@@ -1,4 +1,4 @@
-import type { Purpose, Stop } from "./model";
+import type { Direction, Purpose, Stop } from "./model";
 import type { TimedOD } from "./temporal-model";
 import type { Journey } from "./routing-model";
 import type { CapacityOutcome } from "./capacity-assignment";
@@ -43,6 +43,8 @@ export interface AssignmentDemand extends TimedOD {
   accessSeconds?: number;
   boundaryOriginTrains?: string[];
   boundaryDestinationTrains?: string[];
+  /** When present, start/end constrain arrival at the destination. */
+  arrivalDirection?: Direction;
 }
 export interface ArrivalCohort {
   id: string;
@@ -120,6 +122,7 @@ export interface AssignmentResult {
     milliseconds: number;
     warnings: string[];
     candidateJourneys?: number;
+    hourlyArrivals?: Record<Direction, number[]>;
     timings?: Record<string, number>;
   };
 }

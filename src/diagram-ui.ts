@@ -162,7 +162,9 @@ export function mountDiagram(
       <label>表示対象<select id="diagram-scope"><option value="all">全列車</option><option value="selected" ${settings.selectedOnly ? "selected" : ""}>選択列車のみ</option></select></label>`
       }
       ${routes.length > 1 ? `<label>表示経路<select id="diagram-route">${routes.map((r, i) => `<option value="${i}" ${i === routeIndex ? "selected" : ""}>${e(station(r[0]))} → ${e(station(r.at(-1)!))}</option>`).join("")}</select></label>` : ""}
-      <label><span id="diagram-direction-label">表示方向</span><select id="diagram-direction" aria-labelledby="diagram-direction-label">${Object.entries(directions)
+      <label><span id="diagram-direction-label">表示方向</span><select id="diagram-direction" aria-labelledby="diagram-direction-label">${Object.entries(
+        directions,
+      )
         .map(
           ([value, label]) =>
             `<option value="${value}" ${value === settings.direction ? "selected" : ""}>${label}</option>`,
@@ -172,7 +174,7 @@ export function mountDiagram(
       <label>時間軸<select id="diagram-zoom">${zoomLevels.map((z) => `<option value="${z}" ${z === 160 ? "selected" : ""}>${(z / 160) * 100}%</option>`).join("")}</select></label>
       ${compact ? "" : `<button data-page="9">${result ? "配分結果・条件を確認" : "旅客配分を計算"}</button>`}
     </div>
-    <p class="muted">${result ? `配分推計・${result.config.method === "logit" ? "ロジット" : "最短所要時間"}／定員制約${result.capacity ? "あり" : "なし"}・需要時間窓 ${clock(result.config.start)}–${clock(result.config.end)}` : "配分結果なし。駅利用者数・営業区分・輸送定員を設定して計算してください。"} 駅は${routes.length > 1 ? "選択した経路順" : "登録順"}・等間隔。通過時刻を省略した駅は前後の記録時刻を結びます。停車駅の時刻が欠ける区間は破線で表示。</p>
+    <p class="muted">${result ? `配分推計・${result.diagnostics?.hourlyArrivals ? "目的地到着順" : result.config.method === "logit" ? "ロジット" : "最短所要時間"}／定員制約${result.capacity ? "あり" : "なし"}・${result.diagnostics?.hourlyArrivals ? "目的地への到着時間帯" : "需要時間窓"} ${clock(result.config.start)}–${clock(result.config.end)}` : "配分結果なし。駅利用者数・営業区分・輸送定員を設定して計算してください。"} 駅は${routes.length > 1 ? "選択した経路順" : "登録順"}・等間隔。通過時刻を省略した駅は前後の記録時刻を結びます。停車駅の時刻が欠ける区間は破線で表示。</p>
     <div class="diagram-legend" aria-label="混雑率の凡例"></div>
     ${
       compact

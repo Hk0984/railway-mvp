@@ -1,3 +1,4 @@
+import type { Direction } from "./model";
 import { stationKey, type Journey, type RouteQuery } from "./routing-model";
 import {
   canAlight,
@@ -136,7 +137,7 @@ function destinationIndex(
  */
 export function lineAssignmentProfile(index: RoutingIndex) {
   const destinations = new Map<string, ReturnType<typeof destinationIndex>>();
-  return (q: RouteQuery): Journey[] => {
+  return (q: RouteQuery, firstDirection?: Direction): Journey[] => {
     const origin = stationKey(q.origin),
       destination = stationKey(q.destination);
     if (origin === destination) return [];
@@ -165,6 +166,8 @@ export function lineAssignmentProfile(index: RoutingIndex) {
       const board = boards[i];
       if (board.departure > latest) break;
       if (allowed && !allowed.has(board.trip.train.id)) continue;
+      if (firstDirection && board.trip.train.direction !== firstDirection)
+        continue;
       const best: (Offer | undefined)[] = [];
       const consider = (offer: Offer) => {
         if (offer.arrival > latest) return;

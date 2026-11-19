@@ -19,6 +19,7 @@ import {
   type AssignmentDemand,
   type AssignmentResult,
   type ArrivalCohort,
+  type PassengerAllocation,
   type TrainLoad,
 } from "./assignment-model";
 const sum = (values: number[]) => values.reduce((a, b) => a + b, 0);
@@ -376,7 +377,13 @@ export function assignDemand(
 }
 export function aggregateTrainLoads(
   index: RoutingIndex,
-  result: Pick<AssignmentResult, "journeys" | "allocations">,
+  result: {
+    journeys: Record<string, Pick<Journey, "legs">>;
+    allocations: readonly Pick<
+      PassengerAllocation,
+      "journeyId" | "passengers"
+    >[];
+  },
 ): TrainLoad[] {
   const loads = new Map<string, TrainLoad>();
   for (const [key, trip] of index.trips) {

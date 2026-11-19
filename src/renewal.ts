@@ -9,6 +9,8 @@ import { classificationCounts, isPassengerTrain } from "./classification";
 import { diagramPage, mountDiagram } from "./diagram-ui";
 import { download } from "./io";
 import {
+  arrivalDirections,
+  arrivalHours,
   defaultLineDemand,
   estimateLineDemand,
   periods,
@@ -26,6 +28,8 @@ import {
   areaCard,
   readDemand,
   settingsBody,
+  updateArrivalTotals,
+  updateDemandTiming,
 } from "./renewal-settings";
 import { sampleProject } from "./sample";
 import { loadProject, saveProject } from "./storage";
@@ -79,6 +83,7 @@ const selection = () => ({
 });
 const estimate = () => (demand ??= estimateLineDemand(project, diaId));
 const legacy = () =>
+  !project.lineDemand?.destinationArrival?.enabled &&
   !Object.keys(project.lineDemand?.counts ?? {}).length &&
   !project.lineDemand?.outside.length &&
   !!project.temporal?.slots.length;
@@ -159,6 +164,7 @@ function demandPreview() {
       dailyBoard,
       dailyAlight,
       byTime,
+      byArrival,
       external,
       destinations,
       rejected,
@@ -176,13 +182,25 @@ function demandPreview() {
       .slice(0, 5)
       .map(([name, amount]) => `${e(names.get(name) ?? name)} ${n(amount)}人`)
       .join(" · ");
+    const assigned = result?.diagnostics.hourlyArrivals;
+    const timeSummary = byArrival
+      ? `<div class="table-scroll arrival-hour-grid"><table>
+        <thead><tr><th scope="col">目的地への到着時刻</th><th scope="col">上り需要（人）</th><th scope="col">下り需要（人）</th>${assigned ? '<th scope="col">上り配分（人）</th><th scope="col">下り配分（人）</th>' : ""}</tr></thead>
+        <tbody>${arrivalHours(project)
+          .map(
+            ({ index, label }) =>
+              `<tr><th scope="row">${label}</th>${arrivalDirections.map((dir) => `<td>${n(byArrival[dir][index])}</td>`).join("")}${assigned ? arrivalDirections.map((dir) => `<td>${n(assigned[dir][index])}</td>`).join("") : ""}</tr>`,
+          )
+          .join("")}</tbody>
+      </table></div>`
+      : `<div class="preview-periods">${periods.map((period, i) => `<div><span>${period.label}</span><strong>${n(byTime[i])}<small> 人</small></strong></div>`).join("")}</div>`;
     return `<details id="demand-preview" class="surface preview" ${!result ? "open" : ""}>
       <summary>需要と計算条件</summary>
       ${
         legacy()
           ? "<p>以前保存した時間帯別ODを使用します。駅利用者数を登録すると新しい推計に切り替わります。</p>"
           : `
-        <div class="preview-periods">${periods.map((period, i) => `<div><span>${period.label}</span><strong>${n(byTime[i])}<small> 人</small></strong></div>`).join("")}</div>
+        ${timeSummary}
         <p>路線外の配分対象　流入 ${n(external.inbound)}人・流出 ${n(external.outbound)}人</p>
         ${dominant ? `<p>主な行先　${dominant}</p>` : ""}
         ${Math.abs(dailyBoard - dailyAlight) > 0.01 ? `<p class="muted">内数調整後の駅別合計　乗車 ${n(dailyBoard)}人・降車 ${n(dailyAlight)}人。降車人数は行先の重みに使います。</p>` : ""}
@@ -446,6 +464,7 @@ app.addEventListener("input", (event) => {
       row.hidden = !row.dataset.trainRow!.toLowerCase().includes(query);
   } else if (input.closest("#settings-form")) {
     dirty = true;
+    if (input.name.startsWith("arr-hour-")) updateArrivalTotals(input.form!);
     refreshSaveBar();
   } else if (input.closest("#journey-form")) {
     route = readRoute(input.closest("form")!);
@@ -469,6 +488,7 @@ app.addEventListener("change", (event) => {
   }
   const form = input.closest<HTMLFormElement>("#settings-form");
   if (!form) return;
+  if (input.name === "demand-time-mode") updateDemandTiming(form);
   if (input.name.startsWith("override-")) {
     const fields = form.querySelector<HTMLElement>(
       `[data-override="${input.name.slice(9)}"]`,

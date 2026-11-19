@@ -127,7 +127,58 @@ try {
   await page.getByRole("button", { name: "混雑を計算" }).click();
   await page.getByText("計算完了", { exact: true }).waitFor();
   await page.getByRole("link", { name: "データ設定" }).click();
+  const timeBasis = page.getByLabel("時間帯の基準", { exact: true });
+  assert.equal(await timeBasis.inputValue(), "boarding");
+  await timeBasis.selectOption("arrival");
+  assert.equal(await page.locator('[name^="arr-hour-up-"]').count(), 24);
+  assert.equal(await page.locator('[name^="arr-hour-down-"]').count(), 24);
+  await page.getByLabel("上り 24:00–25:00の到着割合").waitFor();
+  await page.locator('[name^="arr-hour-"]').evaluateAll((inputs) => {
+    for (const input of inputs) input.value = "0";
+  });
+  const upEleven = page.getByLabel("上り 11:00–12:00の到着割合", {
+    exact: true,
+  });
+  const downNoon = page.getByLabel("下り 12:00–13:00の到着割合", {
+    exact: true,
+  });
+  await upEleven.fill("90");
+  await downNoon.fill("100");
+  assert.equal(
+    await page.locator('[data-arrival-total="up"]').textContent(),
+    "90%",
+  );
+  await page.getByRole("button", { name: "設定を保存", exact: true }).click();
+  await page
+    .getByRole("alert")
+    .filter({ hasText: "上りの目的地到着割合を合計100%" })
+    .waitFor();
+  await upEleven.fill("100");
+  await page.getByRole("button", { name: "設定を保存", exact: true }).click();
+  await page.getByText("設定を保存しました", { exact: true }).waitFor();
+  await page.getByRole("link", { name: "混雑ダイヤ図" }).click();
+  await page.getByRole("button", { name: "混雑を計算" }).click();
+  await page.getByText("計算完了", { exact: true }).waitFor();
+  await page.locator("#demand-preview summary").click();
+  const arrivalRow = (time) =>
+    page
+      .locator("#demand-preview tr")
+      .filter({ hasText: time })
+      .locator("td")
+      .allTextContents();
+  const eleven = await arrivalRow("11:00–12:00");
+  const noon = await arrivalRow("12:00–13:00");
+  assert.equal(eleven.length, 4);
+  assert.equal(noon.length, 4);
+  assert.ok(Number(eleven[2].replaceAll(",", "")) > 0);
+  assert.equal(eleven[3], "0");
+  assert.equal(noon[2], "0");
+  assert.ok(Number(noon[3].replaceAll(",", "")) > 0);
+  await page.getByRole("link", { name: "データ設定" }).click();
   await page.reload();
+  assert.equal(await timeBasis.inputValue(), "arrival");
+  assert.equal(await upEleven.inputValue(), "100");
+  assert.equal(await downNoon.inputValue(), "100");
   assert.equal(
     await page.getByPlaceholder("都心方面").inputValue(),
     "都心方面",
@@ -166,7 +217,7 @@ try {
   );
   assert.deepEqual(errors, []);
   console.log(
-    "Renewal smoke passed: route, worker, haze, direction, stroke width, external trains, save/reload, OuDia2nd, midnight, mobile",
+    "Renewal smoke passed: route, worker, haze, direction, stroke width, hourly destination arrivals, external trains, save/reload, OuDia2nd, midnight, mobile",
   );
 } finally {
   await context.close();

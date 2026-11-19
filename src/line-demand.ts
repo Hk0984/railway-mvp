@@ -1,7 +1,7 @@
-import { trainVisits } from "./analysis";
+import { clock, trainVisits } from "./analysis";
 import type { AssignmentDemand } from "./assignment-model";
 import { isPassengerTrain } from "./classification";
-import type { Project, Timetable, Train } from "./model";
+import type { Direction, Project, Timetable, Train } from "./model";
 
 export const periods = [
   { label: "朝", note: "06:00–10:00", from: 6, to: 10 },
@@ -9,6 +9,9 @@ export const periods = [
   { label: "夕方", note: "16:00–20:00", from: 16, to: 20 },
   { label: "夜・早朝", note: "20:00–翌06:00", from: 20, to: 30 },
 ] as const;
+export const arrivalDirections = ["up", "down"] as const;
+export const arrivalHourCount = 24;
+const hourSeconds = 3600;
 export type Flow = "local" | "inbound" | "outbound";
 
 interface StationCounts {
@@ -30,6 +33,10 @@ export interface LineDemand {
   counts: Record<string, StationCounts>;
   shares: Record<"local", number[]> &
     Partial<Record<"inbound" | "outbound", number[]>>;
+  destinationArrival?: {
+    enabled: boolean;
+    shares: Record<Direction, number[]>;
+  };
   outside: OutsideArea[];
 }
 
@@ -94,6 +101,23 @@ export function validateLineDemand(project: Project) {
     )
       throw new Error("時間帯の割合は各設定で合計100%にしてください");
   }
+  if (d.destinationArrival !== undefined) {
+    const arrival = d.destinationArrival;
+    if (typeof arrival?.enabled !== "boolean" || !arrival.shares)
+      throw new Error("目的地到着の設定形式を確認してください");
+    for (const direction of arrivalDirections) {
+      const shares = arrival.shares[direction];
+      if (
+        !Array.isArray(shares) ||
+        shares.length !== arrivalHourCount ||
+        !shares.every((v) => Number.isFinite(v) && v >= 0 && v <= 100) ||
+        Math.abs(shares.reduce((a, b) => a + b, 0) - 100) > 1e-6
+      )
+        throw new Error(
+          `${direction === "up" ? "上り" : "下り"}の目的地到着割合を合計100%にしてください`,
+        );
+    }
+  }
   const ids = new Set<string>();
   for (const a of d.outside) {
     if (
@@ -134,6 +158,82 @@ export function validateLineDemand(project: Project) {
 export function serviceDay(project: Project) {
   const start = project.oud2?.serviceDayStart ?? 4 * 3600;
   return { start, end: start + 86400 };
+}
+
+export const arrivalHourIndex = (time: number) =>
+  Math.floor(time / hourSeconds) % arrivalHourCount;
+export function arrivalHours(project: Project) {
+  const first = Math.floor(serviceDay(project).start / hourSeconds);
+  return Array.from({ length: arrivalHourCount }, (_, i) => {
+    const hour = first + i;
+    return {
+      index: hour % arrivalHourCount,
+      label: `${clock(hour * hourSeconds)}–${clock((hour + 1) * hourSeconds)}`,
+    };
+  });
+}
+export function initialArrivalShares(shares: number[]) {
+  const weights = Array<number>(arrivalHourCount).fill(0);
+  periods.forEach(({ from, to }, i) => {
+    for (let h = from; h < to; h++)
+      weights[h % arrivalHourCount] = shares[i] / (to - from);
+  });
+  let cumulative = 0;
+  let allocated = 0;
+  return weights.map((weight) => {
+    cumulative += weight;
+    const until = Math.round(cumulative * 100);
+    const part = until - allocated;
+    allocated = until;
+    return part / 100;
+  });
+}
+
+function hourlyWindows(start: number, end: number) {
+  const windows: { start: number; end: number }[][] = Array.from(
+    { length: arrivalHourCount },
+    () => [],
+  );
+  for (let time = start; time < end;) {
+    const next = Math.min(
+      end,
+      (Math.floor(time / hourSeconds) + 1) * hourSeconds,
+    );
+    windows[arrivalHourIndex(time)].push({ start: time, end: next });
+    time = next;
+  }
+  return windows;
+}
+
+/** Use the last physical link into the destination for branch-to-branch OD pairs. */
+function arrivalDirectionFor(project: Project) {
+  const order = new Map(project.stations.map(({ id }, i) => [id, i]));
+  const links = new Map<string, { to: string; direction: Direction }[]>();
+  for (const { from, to } of project.oud2?.links ?? []) {
+    links.set(from, [...(links.get(from) ?? []), { to, direction: "down" }]);
+    links.set(to, [...(links.get(to) ?? []), { to: from, direction: "up" }]);
+  }
+  const paths = new Map<string, Map<string, Direction>>();
+  return (origin: string, destination: string): Direction => {
+    let directions = paths.get(origin);
+    if (!directions) {
+      directions = new Map();
+      const queue = [origin],
+        seen = new Set(queue);
+      for (const from of queue)
+        for (const { to, direction } of links.get(from) ?? [])
+          if (!seen.has(to)) {
+            seen.add(to);
+            queue.push(to);
+            directions.set(to, direction);
+          }
+      paths.set(origin, directions);
+    }
+    return (
+      directions.get(destination) ??
+      (order.get(origin)! < order.get(destination)! ? "down" : "up")
+    );
+  };
 }
 
 function timeWindows(start: number, end: number) {
@@ -203,7 +303,17 @@ export function estimateLineDemand(project: Project, diaId: string) {
   const dailyBoard = total(board.values());
   const dailyAlight = total(alight.values());
   const { start, end } = serviceDay(project);
-  const windows = timeWindows(start, end);
+  const arrival = settings.destinationArrival?.enabled
+    ? settings.destinationArrival
+    : undefined;
+  const windows = arrival ? hourlyWindows(start, end) : timeWindows(start, end);
+  const directionFor = arrival ? arrivalDirectionFor(project) : undefined;
+  const byArrival = arrival
+    ? {
+        up: Array<number>(arrivalHourCount).fill(0),
+        down: Array<number>(arrivalHourCount).fill(0),
+      }
+    : undefined;
   const rows: AssignmentDemand[] = [];
   const destinations = new Map<string, number>();
   const byTime = periods.map(() => 0);
@@ -222,11 +332,16 @@ export function estimateLineDemand(project: Project, diaId: string) {
     const label = flow === "outbound" && area ? area : destination;
     destinations.set(label, (destinations.get(label) ?? 0) + amount);
     if (flow !== "local") external[flow] += amount;
-    const shares = settings.shares[flow] ?? settings.shares.local;
+    const direction = directionFor?.(origin, destination);
+    const shares =
+      arrival && direction
+        ? arrival.shares[direction]
+        : (settings.shares[flow] ?? settings.shares.local);
     for (const [i, intervals] of windows.entries()) {
       const volume = (amount * shares[i]) / 100;
       if (!volume) continue;
-      byTime[i] += volume;
+      if (byArrival && direction) byArrival[direction][i] += volume;
+      else byTime[i] += volume;
       const duration = total(intervals.map((w) => w.end - w.start));
       for (const w of intervals)
         rows.push({
@@ -238,6 +353,7 @@ export function estimateLineDemand(project: Project, diaId: string) {
           purpose: "private",
           kind: "outbound",
           passengers: (volume * (w.end - w.start)) / duration,
+          ...(direction && { arrivalDirection: direction }),
           ...(trains &&
             (flow === "inbound"
               ? { boundaryOriginTrains: trains }
@@ -327,6 +443,7 @@ export function estimateLineDemand(project: Project, diaId: string) {
   return {
     rows,
     byTime,
+    byArrival,
     external,
     destinations,
     dailyBoard,

@@ -73,9 +73,13 @@ export function diagramTrains(
   diaId: string,
   result?: DiagramAssignment,
 ) {
+  const destinationTiming = result?.diagnostics?.hourlyArrivals !== undefined;
   const horizon =
     result?.capacity?.horizon ??
-    (result ? result.config.end + result.config.maxJourneySeconds : Infinity);
+    (result
+      ? result.config.end +
+        (destinationTiming ? 0 : result.config.maxJourneySeconds)
+      : Infinity);
   const loads = new Map(
     result?.loads
       .filter((l) => l.datasetId === p.datasetId && l.timetableId === diaId)
@@ -99,7 +103,7 @@ export function diagramTrains(
           kind === "run" &&
           result !== undefined &&
           (start < result.config.start ||
-            start > horizon ||
+            (destinationTiming ? start >= horizon : start > horizon) ||
             load?.segmentObserved?.[fromIndex] === false ||
             (untimedPasses !== undefined &&
               result.capacity !== undefined &&

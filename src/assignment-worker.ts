@@ -1,6 +1,7 @@
 /// <reference lib="webworker" />
 import { buildRoutingIndex } from "./routing";
 import { assignDemand } from "./assignment";
+import { assignDestinationArrivals } from "./destination-assignment";
 import { lineAssignmentProfile } from "./line-assignment-profile";
 import type { DatasetSelection, TransferLink } from "./routing-model";
 import type {
@@ -24,6 +25,16 @@ self.onmessage = (
       index = buildRoutingIndex(p.selections, p.links, {
         includeBoundaryBoards: p.input.some((r) => r.boundaryOriginTrains),
       });
+    if (p.forDiagram && p.input.some((row) => row.arrivalDirection)) {
+      const result = assignDestinationArrivals(
+        index,
+        p.input,
+        p.config,
+        (done, total) => self.postMessage({ type: "progress", done, total }),
+      );
+      self.postMessage({ type: "result", results: [result] });
+      return;
+    }
     const modes = p.compare
       ? (["fastest", "logit"] as const)
       : [p.config.method];

@@ -6,7 +6,11 @@ import {
   type ServiceClass,
 } from "./classification";
 import {
+  arrivalDirections,
+  arrivalHourCount,
+  arrivalHours,
   boundaryTrains,
+  initialArrivalShares,
   defaultLineDemand,
   periods,
   type LineDemand,
@@ -39,6 +43,56 @@ function shareFields(shares: number[], prefix: string) {
         `<label><span>${period.label}</span><small>${period.note}</small><span class="field-unit">${num(prefix + i, shares[i], period.label + "の割合")}<span>%</span></span></label>`,
     )
     .join("")}</div>`;
+}
+
+function destinationArrivalFields(project: Project, demand: LineDemand) {
+  const baseline = initialArrivalShares(demand.shares.local);
+  const shares = demand.destinationArrival?.shares ?? {
+    up: baseline,
+    down: baseline,
+  };
+  return `
+    <p class="muted">1日の到着需要を上り・下りそれぞれ100%に振り分けます。乗換がある場合は目的地に着く列車の方向を使います。路線外への流出は接続駅への到着時刻で集計します。</p>
+    <div class="table-scroll arrival-hour-grid">
+      <table><thead><tr><th scope="col">目的地への到着時刻</th><th scope="col">上り（%）</th><th scope="col">下り（%）</th></tr></thead>
+      <tbody>${arrivalHours(project)
+        .map(
+          ({ index, label }) =>
+            `<tr><th scope="row">${label}</th>${arrivalDirections
+              .map(
+                (dir) =>
+                  `<td><input type="number" name="arr-hour-${dir}-${index}" aria-label="${dir === "up" ? "上り" : "下り"} ${label}の到着割合" min="0" max="100" step="any" value="${shares[dir][index]}"></td>`,
+              )
+              .join("")}</tr>`,
+        )
+        .join("")}</tbody></table>
+    </div>
+    <p class="muted">合計　上り <output data-arrival-total="up">100%</output> ／ 下り <output data-arrival-total="down">100%</output></p>`;
+}
+
+export function updateDemandTiming(form: HTMLFormElement) {
+  const mode = (
+    form.elements.namedItem("demand-time-mode") as HTMLSelectElement
+  ).value;
+  for (const panel of Array.from(
+    form.querySelectorAll<HTMLFieldSetElement>("[data-demand-timing]"),
+  ))
+    panel.hidden = panel.disabled = panel.dataset.demandTiming !== mode;
+  updateArrivalTotals(form);
+}
+export function updateArrivalTotals(form: HTMLFormElement) {
+  for (const dir of arrivalDirections) {
+    const fields = Array.from(
+      form.querySelectorAll<HTMLInputElement>(`[name^="arr-hour-${dir}-"]`),
+    );
+    const total = fields.reduce(
+      (sum, field) => sum + (Number(field.value) || 0),
+      0,
+    );
+    form.querySelector<HTMLOutputElement>(
+      `[data-arrival-total="${dir}"]`,
+    )!.value = `${n(total, 4)}%`;
+  }
 }
 
 export function areaCard(
@@ -99,7 +153,15 @@ export function settingsBody(p: Project, dia: Timetable, draft?: LineDemand) {
         .join("")}</tbody></table></div>
     </section>
     <section class="surface">
-      <div class="section-heading"><div><h2>時間帯の振り分け</h2><p class="muted">合計100%。時間帯内は一様に駅へ到着すると仮定します。</p></div></div>
+      <div class="section-heading"><div><h2>時間帯の振り分け</h2></div></div>
+      <div class="fields single-field">
+        <label>時間帯の基準<select name="demand-time-mode" aria-label="時間帯の基準">
+          <option value="boarding">出発駅に着く時間帯（4枠）</option>
+          <option value="arrival" ${d.destinationArrival?.enabled ? "selected" : ""}>目的地に着く時刻（上下別・1時間ごと）</option>
+        </select></label>
+      </div>
+      <fieldset class="demand-time-fields" data-demand-timing="boarding" ${d.destinationArrival?.enabled ? "hidden disabled" : ""}>
+      <p class="muted">合計100%。時間帯内は一様に出発駅へ到着すると仮定します。</p>
       ${shareFields(d.shares.local, "local")}
       <details ${d.shares.inbound || d.shares.outbound ? "open" : ""}><summary>流入・流出だけ別の割合を使う</summary>
         ${(["inbound", "outbound"] as const)
@@ -110,6 +172,10 @@ export function settingsBody(p: Project, dia: Timetable, draft?: LineDemand) {
           )
           .join("")}
       </details>
+      </fieldset>
+      <fieldset class="demand-time-fields" data-demand-timing="arrival" ${d.destinationArrival?.enabled ? "" : "hidden disabled"}>
+        ${destinationArrivalFields(p, d)}
+      </fieldset>
     </section>
     <section class="surface">
       <div class="section-heading"><div><h2>路線外方面</h2><p class="muted">対象路線の外から入る人数と、外へ出る人数を設定します。</p></div><button type="button" data-action="add-area">方面を追加</button></div>
@@ -161,13 +227,28 @@ export function readDemand(
 ): LineDemand {
   const fields = new FormData(form);
   const str = (key: string) => String(fields.get(key) ?? "");
-  const shares: LineDemand["shares"] = {
-    local: periods.map((_, i) => Number(str("local" + i))),
-  };
-  for (const flow of ["inbound", "outbound"] as const)
-    if (fields.has("override-" + flow))
-      shares[flow] = periods.map((_, i) => Number(str(flow + i)));
   const base = p.lineDemand ?? defaultLineDemand();
+  const byArrival = str("demand-time-mode") === "arrival";
+  const shares: LineDemand["shares"] = byArrival
+    ? base.shares
+    : { local: periods.map((_, i) => Number(str("local" + i))) };
+  if (!byArrival)
+    for (const flow of ["inbound", "outbound"] as const)
+      if (fields.has("override-" + flow))
+        shares[flow] = periods.map((_, i) => Number(str(flow + i)));
+  const destinationArrival = byArrival
+    ? {
+        enabled: true,
+        shares: {
+          up: Array.from({ length: arrivalHourCount }, (_, i) =>
+            Number(str("arr-hour-up-" + i)),
+          ),
+          down: Array.from({ length: arrivalHourCount }, (_, i) =>
+            Number(str("arr-hour-down-" + i)),
+          ),
+        },
+      }
+    : base.destinationArrival && { ...base.destinationArrival, enabled: false };
   const outside = Array.from(
     form.querySelectorAll<HTMLElement>("[data-area]"),
   ).map((el): OutsideArea => {
@@ -219,7 +300,12 @@ export function readDemand(
         : [],
     ),
   );
-  return { counts, shares, outside };
+  return {
+    counts,
+    shares,
+    outside,
+    ...(destinationArrival && { destinationArrival }),
+  };
 }
 
 export function applyTrainSettings(
