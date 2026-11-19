@@ -41,6 +41,8 @@ export interface AssignmentDemand extends TimedOD {
   datasetId: string;
   destinationDatasetId?: string;
   accessSeconds?: number;
+  boundaryOriginTrains?: string[];
+  boundaryDestinationTrains?: string[];
 }
 export interface ArrivalCohort {
   id: string;

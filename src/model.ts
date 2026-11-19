@@ -1,3 +1,4 @@
+import { validateLineDemand, type LineDemand } from "./line-demand";
 import {
   validateTemporalState,
   validateTemporalConfig,
@@ -110,6 +111,7 @@ export interface Parameters {
 export interface Project {
   schemaVersion: 1;
   datasetId?: string;
+  lineDemand?: LineDemand;
   serviceClasses?: ServiceClassification;
   typeCapacities?: Record<string, number>;
   assignmentConfig?: AssignmentConfig;
@@ -205,6 +207,7 @@ export function validateProject(value: unknown): asserts value is Project {
   const typeIds = new Set(p.types.map((t) => t.id));
   validateClassifications(p);
   validateCapacitySettings(p);
+  validateLineDemand(p);
   validateAnalytics(p);
   if (
     typeIds.size !== p.types.length ||

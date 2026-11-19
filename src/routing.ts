@@ -31,6 +31,8 @@ interface Ride {
   trip: Trip;
   i: number;
   j: number;
+  departure: number;
+  arrival: number;
 }
 interface Walk {
   to: StationRef;
@@ -68,6 +70,7 @@ export function clearRoutingProfileCache() {
 export interface RoutingIndex {
   selections: DatasetSelection[];
   boards: Map<string, Board[]>;
+  boundaryBoards?: Map<string, Board[]>;
   trips: Map<string, Trip>;
   stations: Set<string>;
   walks: Map<string, Walk[]>;
@@ -118,7 +121,10 @@ export function validateTransferLinks(
 export function buildRoutingIndex(
   selections: DatasetSelection[],
   links: TransferLink[] = [],
-  options: { permittedRestrictions?: string[] } = {},
+  options: {
+    permittedRestrictions?: string[];
+    includeBoundaryBoards?: boolean;
+  } = {},
 ): RoutingIndex {
   if (
     !selections.length ||
@@ -129,6 +135,9 @@ export function buildRoutingIndex(
     trips = new Map<string, Trip>(),
     stations = new Set<string>(),
     warnings = new Set<string>();
+  const boundaryBoards = options.includeBoundaryBoards
+    ? new Map<string, Board[]>()
+    : undefined;
   let boardId = 0;
   for (const selection of selections) {
     const { datasetId, project, timetableId } = selection;
@@ -175,15 +184,20 @@ export function buildRoutingIndex(
       };
       trips.set(trip.key, trip);
       trip.visits.forEach((s, index) => {
-        if (!canBoard(s)) return;
-        const key = trip.stationKeys[index];
-        const list = boards.get(key) ?? [];
-        list.push({ id: boardId++, trip, index, departure: s.departure! });
-        boards.set(key, list);
+        const store = (target: Map<string, Board[]>, departure: number) => {
+          const key = trip.stationKeys[index];
+          const list = target.get(key) ?? [];
+          list.push({ id: boardId++, trip, index, departure });
+          target.set(key, list);
+        };
+        if (canBoard(s)) store(boards, s.departure!);
+        const departure = s.departure ?? s.arrival;
+        if (boundaryBoards && index === 0 && departure !== undefined)
+          store(boundaryBoards, departure);
       });
     }
   }
-  for (const list of boards.values())
+  for (const list of [...boards.values(), ...(boundaryBoards?.values() ?? [])])
     list.sort(
       (a, b) =>
         a.departure - b.departure || a.trip.key.localeCompare(b.trip.key),
@@ -255,6 +269,7 @@ export function buildRoutingIndex(
   return {
     selections,
     boards,
+    boundaryBoards,
     trips,
     stations,
     walks,
@@ -326,28 +341,28 @@ function insert(
 function materialize(l: Label, includeStops = true): Journey {
   const nodes = chain(l),
     transfers = nodes.flatMap((n) => (n.transfer ? [n.transfer] : []));
-  const legs: JourneyLeg[] = nodes.map(({ ride: { trip, i, j } }) => {
-    const a = trip.visits[i],
-      b = trip.visits[j],
-      s = trip.selection;
-    return {
-      datasetId: s.datasetId,
-      timetableId: s.timetableId,
-      trainId: trip.train.id,
-      trainNumber: trip.train.number,
-      typeId: trip.train.typeId,
-      typeName: s.project.types.find((t) => t.id === trip.train.typeId)!.name,
-      origin: trip.refs[i],
-      destination: trip.refs[j],
-      departure: a.departure!,
-      arrival: b.arrival!,
-      boardIndex: i,
-      alightIndex: j,
-      stops: includeStops
-        ? trip.visits.slice(i, j + 1).map((x) => ({ ...x }))
-        : [],
-    };
-  });
+  const legs: JourneyLeg[] = nodes.map(
+    ({ ride: { trip, i, j, departure, arrival } }) => {
+      const s = trip.selection;
+      return {
+        datasetId: s.datasetId,
+        timetableId: s.timetableId,
+        trainId: trip.train.id,
+        trainNumber: trip.train.number,
+        typeId: trip.train.typeId,
+        typeName: s.project.types.find((t) => t.id === trip.train.typeId)!.name,
+        origin: trip.refs[i],
+        destination: trip.refs[j],
+        departure,
+        arrival,
+        boardIndex: i,
+        alightIndex: j,
+        stops: includeStops
+          ? trip.visits.slice(i, j + 1).map((x) => ({ ...x }))
+          : [],
+      };
+    },
+  );
   return {
     id: signature(l),
     departure: l.departure,
@@ -432,7 +447,11 @@ export function journeyProfile(index: RoutingIndex, q: RouteQuery): Journey[] {
   let work = 0;
   const choices = q.candidateMode === "choices",
     ridingCriterion = q.sort === "riding" || choices;
-  const direct = q.directOnly || q.maxTransfers === 0,
+  const firstTrains = q.boundaryOriginTrains && new Set(q.boundaryOriginTrains);
+  const lastTrains =
+    q.boundaryDestinationTrains && new Set(q.boundaryDestinationTrains);
+  const direct =
+      (q.directOnly || q.maxTransfers === 0) && !firstTrains && !lastTrains,
     cacheKey = JSON.stringify([
       originKey,
       earliest,
@@ -484,7 +503,9 @@ export function journeyProfile(index: RoutingIndex, q: RouteQuery): Journey[] {
             ? [{ to: base.station, seconds: 0, ids: [] }]
             : (index.walks.get(base.key) ?? []);
         for (const walk of targets) {
-          const boardList = index.boards.get(stationKey(walk.to)) ?? [];
+          const boardSource =
+            round === 1 && firstTrains ? index.boundaryBoards : index.boards;
+          const boardList = boardSource?.get(stationKey(walk.to)) ?? [];
           const ready =
             base.arrival +
             walk.seconds +
@@ -496,6 +517,12 @@ export function journeyProfile(index: RoutingIndex, q: RouteQuery): Journey[] {
           ) {
             const board = boardList[bi];
             if (board.departure > latest) break;
+            if (
+              round === 1 &&
+              firstTrains &&
+              !firstTrains.has(board.trip.train.id)
+            )
+              continue;
             if (base.path?.ride.trip.key === board.trip.key) continue;
             const candidate: BoardingLabel = {
               base,
@@ -521,26 +548,44 @@ export function journeyProfile(index: RoutingIndex, q: RouteQuery): Journey[] {
               "経路候補の探索量上限に達しました。乗換回数・対象種別・データセットを絞ってください（不完全な結果は返しません）",
             );
           const stop = board.trip.visits[j];
-          if (
-            !canAlight(stop) ||
-            stop.arrival! < board.departure ||
-            stop.arrival! > latest
-          )
-            continue;
           const key = board.trip.stationKeys[j],
             station = board.trip.refs[j];
+          const boundary = key === destinationKey && lastTrains;
+          if (
+            boundary &&
+            (!boundary.has(board.trip.train.id) ||
+              j !== board.trip.visits.length - 1)
+          )
+            continue;
+          const arrival = boundary
+            ? (stop.arrival ?? stop.departure)
+            : canAlight(stop)
+              ? stop.arrival
+              : undefined;
+          if (
+            arrival === undefined ||
+            arrival < board.departure ||
+            arrival > latest
+          )
+            continue;
           const label: Label = {
             key,
             station,
-            arrival: stop.arrival!,
+            arrival,
             departure: round === 1 ? board.departure : base.departure,
-            riding: base.riding + stop.arrival! - board.departure,
+            riding: base.riding + arrival - board.departure,
             walking: base.walking + (walk.walkingSeconds ?? walk.seconds),
             depth: round,
             firstTrip,
             path: {
               previous: base.path,
-              ride: { trip: board.trip, i: board.index, j },
+              ride: {
+                trip: board.trip,
+                i: board.index,
+                j,
+                departure: board.departure,
+                arrival,
+              },
               walkIds: walk.ids,
             },
           };
@@ -696,15 +741,23 @@ export function validateJourney(
     );
     const a = trip?.visits[leg.boardIndex],
       b = trip?.visits[leg.alightIndex];
+    const boundaryStart = i === 0 && q.boundaryOriginTrains;
+    const boundaryEnd = i === j.legs.length - 1 && q.boundaryDestinationTrains;
     if (
       !trip ||
       !a ||
       !b ||
       leg.alightIndex <= leg.boardIndex ||
-      !canBoard(a) ||
-      !canAlight(b) ||
-      leg.departure !== a.departure ||
-      leg.arrival !== b.arrival ||
+      (boundaryStart
+        ? !boundaryStart.includes(leg.trainId) ||
+          leg.boardIndex !== 0 ||
+          leg.departure !== (a.departure ?? a.arrival)
+        : !canBoard(a) || leg.departure !== a.departure) ||
+      (boundaryEnd
+        ? !boundaryEnd.includes(leg.trainId) ||
+          leg.alightIndex !== trip.visits.length - 1 ||
+          leg.arrival !== (b.arrival ?? b.departure)
+        : !canAlight(b) || leg.arrival !== b.arrival) ||
       leg.origin.stationId !== a.stationId ||
       leg.destination.stationId !== b.stationId ||
       leg.origin.datasetId !== leg.datasetId ||

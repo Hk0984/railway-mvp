@@ -84,8 +84,11 @@ export function mountDiagram(
   project: Project,
   diaId: string,
   result?: AssignmentResult,
+  compact = false,
 ) {
   const settings = readSettings();
+  if (compact)
+    Object.assign(settings, defaultSettings, { enabled: settings.enabled });
   const stations = project.stations;
   const stationNames = stations.map((s) => s.name);
   const rows = new Map(
@@ -128,18 +131,26 @@ export function mountDiagram(
   root.innerHTML = `
     <div class="diagram-controls">
       <label><input id="diagram-enabled" type="checkbox" ${settings.enabled ? "checked" : ""}>混雑ヘイズ</label>
-      <label>透明度<input id="diagram-opacity" type="range" min="0" max=".85" step=".01" value="${settings.opacity}"></label>
+      ${
+        compact
+          ? ""
+          : `<label>透明度<input id="diagram-opacity" type="range" min="0" max=".85" step=".01" value="${settings.opacity}"></label>
       <label>ぼかし幅<input id="diagram-width" type="range" min="3" max="20" value="${settings.width}"></label>
-      <label>表示対象<select id="diagram-scope"><option value="all">全列車</option><option value="selected" ${settings.selectedOnly ? "selected" : ""}>選択列車のみ</option></select></label>
+      <label>表示対象<select id="diagram-scope"><option value="all">全列車</option><option value="selected" ${settings.selectedOnly ? "selected" : ""}>選択列車のみ</option></select></label>`
+      }
       <label>時間軸<select id="diagram-zoom">${zoomLevels.map((z) => `<option value="${z}" ${z === 160 ? "selected" : ""}>${(z / 160) * 100}%</option>`).join("")}</select></label>
-      <button data-page="9">${result ? "配分結果・条件を確認" : "旅客配分を計算"}</button>
+      ${compact ? "" : `<button data-page="9">${result ? "配分結果・条件を確認" : "旅客配分を計算"}</button>`}
     </div>
-    <p class="muted">${result ? `配分推計・${result.config.method === "logit" ? "ロジット" : "最短所要時間"}／定員制約${result.capacity ? "あり" : "なし"}・需要時間窓 ${clock(result.config.start)}–${clock(result.config.end)}` : "配分結果なし。需要・営業区分を設定し、旅客配分を計算すると色が付きます。"} 駅は登録順・等間隔。停車中・未算出区間はスジのみ表示。</p>
+    <p class="muted">${result ? `配分推計・${result.config.method === "logit" ? "ロジット" : "最短所要時間"}／定員制約${result.capacity ? "あり" : "なし"}・需要時間窓 ${clock(result.config.start)}–${clock(result.config.end)}` : "配分結果なし。駅利用者数・営業区分・輸送定員を設定して計算してください。"} 駅は登録順・等間隔。停車中・未算出区間はスジのみ表示。</p>
     <div class="diagram-legend" aria-label="混雑率の凡例"></div>
-    <details><summary>色としきい値を変更（段階式・アプリ独自の区分）</summary>
+    ${
+      compact
+        ? ""
+        : `<details><summary>色としきい値を変更（段階式・アプリ独自の区分）</summary>
       <div class="diagram-legend">${bandLabels.map((label, i) => `<label>${label}<input type="color" aria-label="${label}の色" data-haze-color="${i}" value="${settings.colors[i]}">${i < 4 ? `<input type="number" min="1" step="any" aria-label="${label}の上限（%）" data-haze-limit="${i}" value="${settings.limits[i]}">%` : ""}</label>`).join("")}</div>
       <p id="diagram-setting-error" role="status"></p>
-    </details>
+    </details>`
+    }
     <div class="diagram-scroll" tabindex="0" aria-label="列車ダイヤ図のスクロール領域">
       <div class="diagram-size" aria-hidden="true"></div>
       <canvas role="img" aria-label="横軸は運行日の時刻、縦軸は駅。下の列車と区間の選択から数値を確認できます。"></canvas>
@@ -381,6 +392,23 @@ export function mountDiagram(
     } else updateSettings();
   });
   function updateSettings() {
+    settings.enabled = find<HTMLInputElement>("#diagram-enabled").checked;
+    if (!compact) readAdvancedSettings();
+    legend();
+    redraw();
+    try {
+      if (compact) {
+        const saved = readSettings();
+        localStorage.setItem(
+          storageKey,
+          JSON.stringify({ ...saved, enabled: settings.enabled }),
+        );
+      } else localStorage.setItem(storageKey, JSON.stringify(settings));
+    } catch {
+      // Keep using the current settings for this view.
+    }
+  }
+  function readAdvancedSettings() {
     const limits = Array.from(
       root.querySelectorAll<HTMLInputElement>("[data-haze-limit]"),
       (input) => input.valueAsNumber,
@@ -392,7 +420,6 @@ export function mountDiagram(
     } else
       message.textContent =
         "しきい値は正の数を小さい順に入力してください。直前の値を表示中です。";
-    settings.enabled = find<HTMLInputElement>("#diagram-enabled").checked;
     settings.opacity = find<HTMLInputElement>("#diagram-opacity").valueAsNumber;
     settings.width = find<HTMLInputElement>("#diagram-width").valueAsNumber;
     settings.selectedOnly =
@@ -401,13 +428,6 @@ export function mountDiagram(
       root.querySelectorAll<HTMLInputElement>("[data-haze-color]"),
       (input) => input.value,
     );
-    legend();
-    redraw();
-    try {
-      localStorage.setItem(storageKey, JSON.stringify(settings));
-    } catch {
-      // Keep using the current settings for this view.
-    }
   }
   root.addEventListener("input", (event) => {
     const target = event.target as HTMLInputElement;

@@ -15,7 +15,9 @@ self.onmessage = (
 ) => {
   try {
     const p = event.data,
-      index = buildRoutingIndex(p.selections, p.links);
+      index = buildRoutingIndex(p.selections, p.links, {
+        includeBoundaryBoards: p.input.some((r) => r.boundaryOriginTrains),
+      });
     const modes = p.compare
       ? (["fastest", "logit"] as const)
       : [p.config.method];
