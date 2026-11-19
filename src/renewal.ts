@@ -185,9 +185,11 @@ function demandPreview() {
       .map(([name, amount]) => `${e(names.get(name) ?? name)} ${n(amount)}人`)
       .join(" · ");
     const assigned = result?.diagnostics.hourlyArrivals;
+    const limit = result?.diagnostics.boardingLimit;
+    const limitPercent = project.lineDemand?.boardingLimitPercent;
     const timeSummary = byArrival
       ? `<div class="table-scroll arrival-hour-grid"><table>
-        <thead><tr><th scope="col">目的地への到着時刻</th><th scope="col">上り需要（人）</th><th scope="col">下り需要（人）</th>${assigned ? '<th scope="col">上り配分（人）</th><th scope="col">下り配分（人）</th>' : ""}</tr></thead>
+        <thead><tr><th scope="col">目的地への到着時刻</th><th scope="col">上り需要（人）</th><th scope="col">下り需要（人）</th>${assigned ? `<th scope="col">上り${limit ? "到着" : "配分"}（人）</th><th scope="col">下り${limit ? "到着" : "配分"}（人）</th>` : ""}</tr></thead>
         <tbody>${arrivalHours(project)
           .map(
             ({ index, label }) =>
@@ -210,7 +212,16 @@ function demandPreview() {
         ${rejected > 0 ? `<p>OD作成時の未配分 ${n(rejected)}人</p><ul>${warnings.map((v) => `<li>${e(v)}</li>`).join("")}</ul>` : ""}`
       }
       <p class="muted">営業 ${n(totals.passenger, 0)}本／要確認 ${n(totals.review, 0)}本／輸送定員が未登録の営業列車 ${n(missing, 0)}本</p>
-      ${result ? `<p>列車へ配分 ${n(result.totals.assigned)}人・時刻条件による未配分 ${n(result.totals.unassigned)}人</p>` : ""}
+      ${limitPercent !== undefined ? `<p>乗車上限 ${n(limitPercent, 4)}%</p>` : ""}
+      ${
+        result
+          ? limit
+            ? `<p>到着済み ${n(result.totals.assigned)}人・未着 ${n(result.totals.unassigned)}人</p>
+           <p>上限で後続便待ちになった人数 ${n(limit.denied)}人・計算終了時に待機中 ${n(limit.waiting)}人</p>
+           ${limit.afterServiceDay > 0 ? `<p>運行日終了後の到着 ${n(limit.afterServiceDay)}人</p>` : ""}`
+            : `<p>列車へ配分 ${n(result.totals.assigned)}人・時刻条件による未配分 ${n(result.totals.unassigned)}人</p>`
+          : ""
+      }
       <button type="button" data-action="settings">データ設定を開く</button>
     </details>`;
   } catch (err) {
@@ -420,6 +431,7 @@ function calculate() {
     config,
     compare: false,
     forDiagram: true,
+    boardingLimitPercent: lineDemand?.boardingLimitPercent,
     smoothedArrivalShares:
       lineDemand?.destinationArrival?.enabled &&
       lineDemand.destinationArrival.smooth

@@ -208,6 +208,30 @@ try {
     await page.getByPlaceholder("都心方面").inputValue(),
     "都心方面",
   );
+  const cap = page.getByLabel("乗車上限の混雑率（%）", { exact: true });
+  await cap.fill("10");
+  await page.getByRole("button", { name: "設定を保存", exact: true }).click();
+  await page.getByText("設定を保存しました", { exact: true }).waitFor();
+  await page.getByRole("link", { name: "混雑ダイヤ図" }).click();
+  await page.getByRole("button", { name: "混雑を計算" }).click();
+  await page.getByText("計算完了", { exact: true }).waitFor();
+  assert.match(
+    await page.locator("#train-diagram > p.muted").first().innerText(),
+    /乗車上限 10%/,
+  );
+  await page.locator("#demand-preview summary").click();
+  const waiting = await page
+    .getByText(/上限で後続便待ちになった人数/)
+    .innerText();
+  assert.ok(
+    Number(waiting.match(/人数 ([\d,.]+)/)?.[1].replaceAll(",", "")) > 0,
+  );
+  await page.locator("#diagram-train").selectOption("up-15");
+  const peak = await page.locator("#diagram-train-detail").innerText();
+  assert.match(peak, /最大混雑率 10%/);
+  await page.getByRole("link", { name: "データ設定" }).click();
+  await page.reload();
+  assert.equal(await cap.inputValue(), "10");
   const fixture = await (
     await fetch(new URL("samples/basic-1.07.oud2", page.url()))
   ).arrayBuffer();
@@ -242,7 +266,7 @@ try {
   );
   assert.deepEqual(errors, []);
   console.log(
-    "Renewal smoke passed: route, worker, haze, direction, stroke width, zoom scale, smoothed hourly destination arrivals, external trains, save/reload, OuDia2nd, midnight, mobile",
+    "Renewal smoke passed: route, worker, haze, direction, stroke width, zoom scale, smoothed hourly destination arrivals, capacity limit, external trains, save/reload, OuDia2nd, midnight, mobile",
   );
 } finally {
   await context.close();

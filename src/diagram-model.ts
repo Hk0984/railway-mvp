@@ -74,8 +74,10 @@ export function diagramTrains(
   result?: DiagramAssignment,
 ) {
   const destinationTiming = result?.diagnostics?.hourlyArrivals !== undefined;
+  const capacityHorizon =
+    result?.capacity?.horizon ?? result?.diagnostics?.boardingLimit?.horizon;
   const horizon =
-    result?.capacity?.horizon ??
+    capacityHorizon ??
     (result
       ? result.config.end +
         (destinationTiming ? 0 : result.config.maxJourneySeconds)
@@ -103,10 +105,12 @@ export function diagramTrains(
           kind === "run" &&
           result !== undefined &&
           (start < result.config.start ||
-            (destinationTiming ? start >= horizon : start > horizon) ||
+            (destinationTiming && capacityHorizon === undefined
+              ? start >= horizon
+              : start > horizon) ||
             load?.segmentObserved?.[fromIndex] === false ||
             (untimedPasses !== undefined &&
-              result.capacity !== undefined &&
+              capacityHorizon !== undefined &&
               end > horizon));
         // An untimed pass has no boarding or alighting. The first leg's load
         // remains valid until the next recorded time without estimating pass times.

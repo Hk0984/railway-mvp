@@ -123,6 +123,14 @@ export interface AssignmentResult {
     warnings: string[];
     candidateJourneys?: number;
     hourlyArrivals?: Record<Direction, number[]>;
+    boardingLimit?: {
+      percent: number;
+      horizon: number;
+      denied: number;
+      waiting: number;
+      afterServiceDay: number;
+    };
+
     timings?: Record<string, number>;
   };
 }

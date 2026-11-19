@@ -68,6 +68,12 @@ function forwardLegs(
     });
 }
 
+type PlannedArrival = (
+  row: AssignmentDemand,
+  count: number,
+  journey?: { id: string; legs: JourneyLeg[] },
+) => void;
+
 /** Assign each part of the hourly demand curve to the closest arrival in that hour. */
 export function assignDestinationArrivals(
   index: RoutingIndex,
@@ -75,6 +81,7 @@ export function assignDestinationArrivals(
   config: AssignmentConfig,
   onProgress?: (done: number, total: number) => void,
   smoothedShares?: Record<Direction, number[]>,
+  onPlan?: PlannedArrival,
 ): DiagramAssignment {
   if (
     index.selections.length !== 1 ||
@@ -172,12 +179,14 @@ export function assignDestinationArrivals(
     const feasible = offerings
       .filter((j, i) => i === 0 || j.departure !== offerings[i - 1].departure)
       .map((journey) => ({ journey, arrives: mirror - journey.departure }));
-    group.forEach(({ start, end, passengers }) => {
+    group.forEach((demand) => {
+      const { start, end, passengers } = demand;
       const choices = feasible.filter(
         ({ arrives }) => start <= arrives && arrives < end,
       );
       if (!choices.length) {
         unassigned += passengers;
+        onPlan?.(demand, passengers);
         return;
       }
       const curve = curves?.[direction][arrivalHourIndex(start)];
@@ -192,10 +201,14 @@ export function assignDestinationArrivals(
             : (until - previous) / (end - start);
         const count = passengers * fraction;
         previous = until;
+        if (count === 0) return;
         assigned += count;
         boardingEvents += count * journey.legs.length;
         hourlyArrivals[direction][arrivalHourIndex(arrives)] += count;
-        journeys[journey.id] ??= { legs: forwardLegs(index, journey, mirror) };
+        const plan = (journeys[journey.id] ??= {
+          legs: forwardLegs(index, journey, mirror),
+        });
+        onPlan?.(demand, count, { id: journey.id, legs: plan.legs });
         const prior = allocations.get(journey.id);
         if (prior) prior.passengers += count;
         else

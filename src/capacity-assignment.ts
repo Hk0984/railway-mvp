@@ -12,7 +12,7 @@ import {
   type JourneyLeg,
   type RouteQuery,
 } from "./routing-model";
-import type { RoutingIndex } from "./routing";
+import type { RoutingIndex, Trip } from "./routing";
 import type {
   AssignmentConfig,
   AssignmentDemand,
@@ -75,6 +75,7 @@ export interface CapacityOutcome {
   packets: CapacityPacket[];
   events: CapacityEvent[];
   loads: TrainLoad[];
+  boardingLimitPercent?: number;
   totals: Record<PassengerState, number> & {
     selected: number;
     deniedEvents: number;
@@ -89,6 +90,48 @@ const tripKey = (l: JourneyLeg) =>
   JSON.stringify([l.datasetId, l.timetableId, l.trainId]);
 const near = (a: number, b: number) =>
   Math.abs(a - b) <= 1e-7 + 1e-11 * Math.max(Math.abs(a), Math.abs(b));
+export type CapacityPlan = Pick<
+  AssignmentResult,
+  | "input"
+  | "cohorts"
+  | "allocations"
+  | "unallocated"
+  | "totals"
+  | "diagnostics"
+  | "config"
+> & {
+  journeys: Record<string, Pick<Journey, "legs">>;
+};
+interface BoardingLimit {
+  percent: number;
+  profiles: (q: RouteQuery, row: AssignmentDemand) => Journey[];
+}
+
+function boundaryTimes(rows: AssignmentDemand[]) {
+  return {
+    origin: new Set(rows.flatMap((r) => r.boundaryOriginTrains ?? [])),
+    destination: new Set(
+      rows.flatMap((r) => r.boundaryDestinationTrains ?? []),
+    ),
+  };
+}
+function boardingTime(trip: Trip, i: number, boundary: ReadonlySet<string>) {
+  const s = trip.visits[i];
+  return (
+    s.departure ??
+    (i === 0 && boundary.has(trip.train.id) ? s.arrival : undefined)
+  );
+}
+function alightingTime(trip: Trip, i: number, boundary: ReadonlySet<string>) {
+  const s = trip.visits[i];
+  return (
+    s.arrival ??
+    (i === trip.visits.length - 1 && boundary.has(trip.train.id)
+      ? s.departure
+      : undefined)
+  );
+}
+
 /** Discrete-event, aggregate FIFO passengers. No reservation of future legs after a denied boarding. */
 export function assignCapacity(
   index: RoutingIndex,
@@ -141,12 +184,34 @@ export function assignCapacity(
       }
     : index;
   const base = assignDemand(
-      idx,
-      input,
-      { ...config, capacityConstrained: false },
-      onProgress,
-    ),
-    horizon = config.simulationEnd ?? config.end + config.maxJourneySeconds;
+    idx,
+    input,
+    { ...config, capacityConstrained: false },
+    onProgress,
+  );
+  const out = simulateCapacity(idx, base, config, onProgress);
+  if (unknown.length)
+    out.warnings.push(
+      `定員不明・座席定員のみの${unknown.length}本を明示設定により除外`,
+    );
+  out.milliseconds = performance.now() - started;
+  base.config = structuredClone(config);
+  base.capacity = out;
+  return base;
+}
+
+/** Simulate actual boardings in chronological order after preparing the initial itineraries. */
+export function simulateCapacity(
+  idx: RoutingIndex,
+  base: CapacityPlan,
+  config: AssignmentConfig,
+  onProgress?: (n: number, total: number, stage?: "od" | "events") => void,
+  limit?: BoardingLimit,
+): CapacityOutcome {
+  const started = performance.now();
+  const horizon = config.simulationEnd ?? config.end + config.maxJourneySeconds;
+  const input = base.input;
+  const boundary = boundaryTimes(input);
   const out: CapacityOutcome = {
     version: 1,
     horizon,
@@ -166,12 +231,8 @@ export function assignCapacity(
       reassigned: 0,
       additionalWaitPersonSeconds: 0,
     },
-    warnings: [
-      ...base.diagnostics.warnings,
-      ...(unknown.length
-        ? [`定員不明・座席定員のみの${unknown.length}本を明示設定により除外`]
-        : []),
-    ],
+    ...(limit && { boardingLimitPercent: limit.percent }),
+    warnings: [...base.diagnostics.warnings],
     milliseconds: 0,
   };
   const cohorts = new Map(base.cohorts.map((c) => [c.id, c]));
@@ -271,19 +332,45 @@ export function assignCapacity(
       minimumTransferSeconds: config.minimumTransferSeconds,
       directOnly: remaining === 1,
       candidateMode: "choices",
-      windowEnd: deadline,
+      windowEnd: limit ? Math.min(deadline, horizon) : deadline,
+      ...(p.history.length === 0 && {
+        boundaryOriginTrains: row.boundaryOriginTrains,
+      }),
+      boundaryDestinationTrains: row.boundaryDestinationTrains,
     };
     let candidates: Journey[];
     try {
-      candidates = cachedProfile(idx, q).filter(
+      candidates = (
+        limit ? limit.profiles(q, row) : cachedProfile(idx, q)
+      ).filter(
         (j) =>
-          j.arrival <= deadline &&
+          j.departure >= ready &&
+          j.arrival <= q.windowEnd! &&
           (p.history.length > 0 ||
             j.departure - p.firstArrival <= config.maxWaitSeconds),
       );
     } catch (e) {
       out.warnings.push((e as Error).message);
       candidates = [];
+    }
+    if (!candidates.length) {
+      p.state = "waiting";
+      p.plan = [];
+      p.reason = "積み残し後に条件を満たす後続経路なし";
+      return;
+    }
+    if (limit) {
+      const next = candidates.reduce((best, journey) =>
+        (journey.departure - best.departure ||
+          journey.arrival - best.arrival ||
+          journey.transferCount - best.transferCount ||
+          journey.id.localeCompare(best.id)) < 0
+          ? journey
+          : best,
+      );
+      p.plan = next.legs.slice();
+      queue(p);
+      return;
     }
     const coeff = config.coefficients[row.purpose];
     const ranked = candidates
@@ -299,12 +386,6 @@ export function assignCapacity(
             a.j.id.localeCompare(b.j.id),
       )
       .slice(0, config.method === "fastest" ? 1 : config.maxChoices);
-    if (!ranked.length) {
-      p.state = "waiting";
-      p.plan = [];
-      p.reason = "積み残し後に条件を満たす後続経路なし";
-      return;
-    }
     const weights = ranked.map((r) =>
         Math.exp(-coeff.scale * (r.cost - ranked[0].cost)),
       ),
@@ -325,9 +406,11 @@ export function assignCapacity(
   }
   const events: [number, number, string, number][] = [];
   for (const [key, t] of idx.trips)
-    for (const [i, s] of t.visits.entries()) {
-      if (s.arrival !== undefined) events.push([s.arrival, 0, key, i]);
-      if (s.departure !== undefined) events.push([s.departure, 1, key, i]);
+    for (let i = 0; i < t.visits.length; i++) {
+      const arrival = alightingTime(t, i, boundary.destination);
+      const departure = boardingTime(t, i, boundary.origin);
+      if (arrival !== undefined) events.push([arrival, 0, key, i]);
+      if (departure !== undefined) events.push([departure, 1, key, i]);
     }
   events.sort(
     (a, b) =>
@@ -366,11 +449,7 @@ export function assignCapacity(
         (a, b) =>
           a.ready - b.ready || a.firstArrival - b.firstArrival || a.id - b.id,
       );
-      const cap = transportCapacity(
-        trip.selection.project,
-        trip.selection.timetableId,
-        trip.train.id,
-      )!;
+      const cap = load.capacity! * ((limit?.percent ?? 100) / 100);
       let space = cap - riding.reduce((s, p) => s + p.passengers, 0);
       for (const waiting of list) {
         if (waiting.ready > time + 1e-8)
@@ -447,6 +526,10 @@ export function assignCapacity(
     out.totals.reassigned += e.reassigned;
     out.totals.additionalWaitPersonSeconds += e.additionalWaitPersonSeconds;
   }
+  const uniqueByTrain = new Map<string, number>();
+  for (const p of packets)
+    for (const key of new Set(p.history.map(tripKey)))
+      uniqueByTrain.set(key, (uniqueByTrain.get(key) ?? 0) + p.passengers);
   for (const l of out.loads) {
     const trip = idx.trips.get(l.key)!;
     const spec = capacitySpec(
@@ -464,7 +547,9 @@ export function assignCapacity(
       onboard += l.boardings[i] - l.alightings[i];
       if (i < l.stops.length - 1) {
         const observed =
-          (l.stops[i].departure ?? l.stops[i].arrival ?? Infinity) <= horizon;
+          (boardingTime(trip, i, boundary.origin) ??
+            l.stops[i].arrival ??
+            Infinity) <= horizon;
         l.segmentObserved.push(observed);
         l.segmentLoads.push(
           observed ? (Math.abs(onboard) < 1e-9 ? 0 : onboard) : 0,
@@ -473,9 +558,7 @@ export function assignCapacity(
     }
     l.totalBoardings = l.boardings.reduce((a, b) => a + b, 0);
     l.totalAlightings = l.alightings.reduce((a, b) => a + b, 0);
-    l.uniquePassengers = packets
-      .filter((p) => p.history.some((h) => tripKey(h) === l.key))
-      .reduce((s, p) => s + p.passengers, 0);
+    l.uniquePassengers = uniqueByTrain.get(l.key) ?? 0;
     l.peakLoad = Math.max(0, ...l.segmentLoads);
     l.peakSegments = l.segmentLoads.flatMap((v, i) =>
       v > 0 && near(v, l.peakLoad) ? [i] : [],
@@ -486,18 +569,24 @@ export function assignCapacity(
     l.peakOccupancy = l.peakLoad / l.capacity;
   }
   out.milliseconds = performance.now() - started;
-  const errors = validateCapacity(idx, base, out);
+  const errors = validateSingleCapacity(idx, base, out);
   if (errors.length) throw new Error("容量配分検証失敗: " + errors.join(" / "));
-  base.config = structuredClone(config);
-  base.capacity = out;
-  return base;
+  return out;
 }
 export function validateCapacity(
   index: RoutingIndex,
   base: AssignmentResult,
   o: CapacityOutcome,
 ) {
-  if (o.version === 2) return validateIntegratedCapacity(index, base, o);
+  return o.version === 2
+    ? validateIntegratedCapacity(index, base, o)
+    : validateSingleCapacity(index, base, o);
+}
+function validateSingleCapacity(
+  index: RoutingIndex,
+  base: CapacityPlan,
+  o: CapacityOutcome,
+) {
   const errors: string[] = [];
   const total = o.totals;
   if (
@@ -528,15 +617,25 @@ export function validateCapacity(
       o.packets.some((p) => !Number.isInteger(p.passengers)))
   )
     errors.push("旅客ID・整数人数不正");
+  const byCohort = new Map<string, number>();
+  const transitByTrain = new Map<string, number>();
+  const eventsByTrain = new Map<string, { board: number; alight: number }>();
+  for (const p of o.packets) {
+    byCohort.set(p.cohortId, (byCohort.get(p.cohortId) ?? 0) + p.passengers);
+    if (p.state === "inTransit" && p.history.length) {
+      const key = tripKey(p.history.at(-1)!);
+      transitByTrain.set(key, (transitByTrain.get(key) ?? 0) + p.passengers);
+    }
+  }
+  for (const e of o.events) {
+    if (e.type === "denied") continue;
+    const sums = eventsByTrain.get(e.trainKey) ?? { board: 0, alight: 0 };
+    sums[e.type] += e.passengers;
+    eventsByTrain.set(e.trainKey, sums);
+  }
+  const boundary = boundaryTimes(base.input);
   for (const [id, c] of cohorts)
-    if (
-      !near(
-        c.passengers,
-        o.packets
-          .filter((p) => p.cohortId === id)
-          .reduce((s, p) => s + p.passengers, 0),
-      )
-    )
+    if (!near(c.passengers, byCohort.get(id) ?? 0))
       errors.push("コホート保存則");
   for (const l of o.loads) {
     const source = index.trips.get(l.key);
@@ -550,20 +649,10 @@ export function validateCapacity(
         )
     )
       errors.push("輸送定員参照不一致");
-    const actual = o.events.filter((e) => e.trainKey === l.key);
+    const actual = eventsByTrain.get(l.key);
     if (
-      !near(
-        actual
-          .filter((e) => e.type === "board")
-          .reduce((s, e) => s + e.passengers, 0),
-        l.totalBoardings,
-      ) ||
-      !near(
-        actual
-          .filter((e) => e.type === "alight")
-          .reduce((s, e) => s + e.passengers, 0),
-        l.totalAlightings,
-      )
+      !near(actual?.board ?? 0, l.totalBoardings) ||
+      !near(actual?.alight ?? 0, l.totalAlightings)
     )
       errors.push("乗降イベント収支");
     let n = 0;
@@ -572,7 +661,7 @@ export function validateCapacity(
       n += l.boardings[i] - l.alightings[i];
       if (
         n < -1e-7 ||
-        n > l.capacity! + 1e-7 ||
+        n > l.capacity! * ((o.boardingLimitPercent ?? 100) / 100) + 1e-7 ||
         (i < l.segmentLoads.length &&
           l.segmentObserved?.[i] !== false &&
           !near(n, l.segmentLoads[i]))
@@ -580,22 +669,24 @@ export function validateCapacity(
         errors.push("車内人数・容量制約");
       if (
         (l.boardings[i] > 0 &&
+          !(i === 0 && boundary.origin.has(l.trainId)) &&
           (s.status !== "stop" ||
             s.pickupAllowed === false ||
             s.departure === undefined)) ||
         (l.alightings[i] > 0 &&
+          !(i === l.stops.length - 1 && boundary.destination.has(l.trainId)) &&
           (s.status !== "stop" ||
             s.dropoffAllowed === false ||
             s.arrival === undefined))
       )
         errors.push("乗降禁止位置");
     }
-    const transit = o.packets
-      .filter(
-        (p) => p.state === "inTransit" && tripKey(p.history.at(-1)!) === l.key,
+    if (
+      !near(
+        l.totalBoardings - l.totalAlightings,
+        transitByTrain.get(l.key) ?? 0,
       )
-      .reduce((s, p) => s + p.passengers, 0);
-    if (!near(l.totalBoardings - l.totalAlightings, transit))
+    )
       errors.push("列車終端収支");
   }
   for (const p of o.packets) {
@@ -624,8 +715,11 @@ export function validateCapacity(
         !trip ||
         h.departure < p.firstArrival ||
         h.boardIndex >= h.alightIndex ||
-        trip.visits[h.boardIndex]?.departure !== h.departure ||
-        trip.visits[h.alightIndex]?.arrival !== h.arrival ||
+        !trip.visits[h.boardIndex] ||
+        !trip.visits[h.alightIndex] ||
+        boardingTime(trip, h.boardIndex, boundary.origin) !== h.departure ||
+        alightingTime(trip, h.alightIndex, boundary.destination) !==
+          h.arrival ||
         (i > 0 &&
           (p.history[i - 1].destination.stationId !== h.origin.stationId ||
             p.history[i - 1].arrival + base.config.minimumTransferSeconds >

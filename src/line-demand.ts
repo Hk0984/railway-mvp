@@ -39,6 +39,7 @@ export interface LineDemand {
     smooth?: boolean;
     shares: Record<Direction, number[]>;
   };
+  boardingLimitPercent?: number;
   outside: OutsideArea[];
 }
 
@@ -78,11 +79,18 @@ export function boundaryTrains(
 }
 
 const nonnegative = (v: number) => Number.isFinite(v) && v >= 0 && v <= 1e9;
+export const validBoardingLimit = (v: unknown): v is number =>
+  typeof v === "number" && Number.isFinite(v) && v >= 0;
 export function validateLineDemand(project: Project) {
   const d = project.lineDemand;
   if (d === undefined) return;
   if (!d || !d.counts || !d.shares || !Array.isArray(d.outside))
     throw new Error("需要設定の形式を確認してください");
+  if (
+    d.boardingLimitPercent !== undefined &&
+    !validBoardingLimit(d.boardingLimitPercent)
+  )
+    throw new Error("乗車上限の混雑率は0%以上の数値で入力してください");
   const stationIds = new Set(project.stations.map((s) => s.id));
   for (const [id, v] of Object.entries(d.counts)) {
     if (

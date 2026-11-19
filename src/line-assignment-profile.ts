@@ -50,11 +50,13 @@ function destinationIndex(
   index: RoutingIndex,
   destination: string,
   trainIds?: string[],
+  lastDirection?: Direction,
 ) {
   const allowed = trainIds && new Set(trainIds);
   const landings = new Map<Trip, Landing[]>();
   for (const trip of index.trips.values()) {
     if (allowed && !allowed.has(trip.train.id)) continue;
+    if (lastDirection && trip.train.direction !== lastDirection) continue;
     const visits = trip.visits;
     for (
       let j = allowed ? visits.length - 1 : 0;
@@ -137,17 +139,26 @@ function destinationIndex(
  */
 export function lineAssignmentProfile(index: RoutingIndex) {
   const destinations = new Map<string, ReturnType<typeof destinationIndex>>();
-  return (q: RouteQuery, firstDirection?: Direction): Journey[] => {
+  return (
+    q: RouteQuery,
+    firstDirection?: Direction,
+    lastDirection?: Direction,
+  ): Journey[] => {
     const origin = stationKey(q.origin),
       destination = stationKey(q.destination);
     if (origin === destination) return [];
-    const key = JSON.stringify([destination, q.boundaryDestinationTrains]);
+    const key = JSON.stringify([
+      destination,
+      q.boundaryDestinationTrains,
+      lastDirection,
+    ]);
     let target = destinations.get(key);
     if (!target) {
       target = destinationIndex(
         index,
         destination,
         q.boundaryDestinationTrains,
+        lastDirection,
       );
       if (destinations.size === 48)
         destinations.delete(destinations.keys().next().value!);

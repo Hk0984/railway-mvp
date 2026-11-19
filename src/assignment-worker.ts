@@ -1,5 +1,6 @@
 /// <reference lib="webworker" />
 import { buildRoutingIndex } from "./routing";
+import { assignDiagramCapacity } from "./diagram-capacity";
 import { assignDemand } from "./assignment";
 import { assignDestinationArrivals } from "./destination-assignment";
 import { lineAssignmentProfile } from "./line-assignment-profile";
@@ -18,6 +19,7 @@ self.onmessage = (
     config: AssignmentConfig;
     compare: boolean;
     forDiagram?: boolean;
+    boardingLimitPercent?: number;
     smoothedArrivalShares?: Record<Direction, number[]>;
     compareCapacity?: boolean;
   }>,
@@ -27,6 +29,19 @@ self.onmessage = (
       index = buildRoutingIndex(p.selections, p.links, {
         includeBoundaryBoards: p.input.some((r) => r.boundaryOriginTrains),
       });
+    if (p.forDiagram && p.boardingLimitPercent !== undefined) {
+      const result = assignDiagramCapacity(
+        index,
+        p.input,
+        p.config,
+        p.boardingLimitPercent,
+        (done, total, stage) =>
+          self.postMessage({ type: "progress", done, total, stage }),
+        p.smoothedArrivalShares,
+      );
+      self.postMessage({ type: "result", results: [result] });
+      return;
+    }
     if (p.forDiagram && p.input.some((row) => row.arrivalDirection)) {
       const result = assignDestinationArrivals(
         index,
