@@ -4,11 +4,12 @@ import type {
   AssignmentDemand,
   DiagramAssignment,
 } from "./assignment-model";
+import { demandMass, hourlyDemandCurve } from "./hourly-demand-curve";
 import { arrivalHourCount, arrivalHourIndex } from "./line-demand";
 import { lineAssignmentProfile } from "./line-assignment-profile";
 import { buildRoutingIndex, type RoutingIndex } from "./routing";
 import type { Journey, JourneyLeg } from "./routing-model";
-import type { Train } from "./model";
+import type { Direction, Train } from "./model";
 
 function reversedProfile(index: RoutingIndex, mirror: number) {
   const selection = index.selections[0];
@@ -67,13 +68,13 @@ function forwardLegs(
     });
 }
 
-/** Match arrivals to actual services in their desired hour, using a uniform
- * distribution within the hour and the closest scheduled arrival. */
+/** Assign each part of the hourly demand curve to the closest arrival in that hour. */
 export function assignDestinationArrivals(
   index: RoutingIndex,
   rows: AssignmentDemand[],
   config: AssignmentConfig,
   onProgress?: (done: number, total: number) => void,
+  smoothedShares?: Record<Direction, number[]>,
 ): DiagramAssignment {
   if (
     index.selections.length !== 1 ||
@@ -91,6 +92,10 @@ export function assignDestinationArrivals(
     for (const stop of visits)
       mirror = Math.max(mirror, stop.arrival ?? 0, stop.departure ?? 0);
   const profile = reversedProfile(index, mirror);
+  const curves = smoothedShares && {
+    up: hourlyDemandCurve(smoothedShares.up, true),
+    down: hourlyDemandCurve(smoothedShares.down, true),
+  };
   const groups = new Map<string, AssignmentDemand[]>();
   let input = 0;
   for (const row of rows) {
@@ -175,11 +180,17 @@ export function assignDestinationArrivals(
         unassigned += passengers;
         return;
       }
+      const curve = curves?.[direction][arrivalHourIndex(start)];
+      const mass = curve ? demandMass(curve, start, end) : 0;
       let previous = start;
       choices.forEach(({ journey, arrives }, i) => {
         const until =
           i + 1 < choices.length ? (arrives + choices[i + 1].arrives) / 2 : end;
-        const count = (passengers * (until - previous)) / (end - start);
+        const fraction =
+          curve && mass > 0
+            ? demandMass(curve, previous, until) / mass
+            : (until - previous) / (end - start);
+        const count = passengers * fraction;
         previous = until;
         assigned += count;
         boardingEvents += count * journey.legs.length;

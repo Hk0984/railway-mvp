@@ -2,6 +2,11 @@ import { expect, it } from "vitest";
 import { defaultAssignmentConfig } from "../src/assignment-model";
 import { assignDestinationArrivals } from "../src/destination-assignment";
 import {
+  demandMass,
+  demandRate,
+  hourlyDemandCurve,
+} from "../src/hourly-demand-curve";
+import {
   arrivalHourIndex,
   arrivalHours,
   defaultLineDemand,
@@ -101,28 +106,39 @@ it("assigns the whole hour to timed arrivals and divides multiple arrivals at th
   const index = buildRoutingIndex([
     { datasetId: project.datasetId!, project, timetableId: dia.id },
   ]);
-  const result = assignDestinationArrivals(
-    index,
-    [
-      {
-        datasetId: project.datasetId!,
-        start: at(11),
-        end: at(12),
-        arrivalDirection: "down",
-        origin: "s0",
-        destination: "s4",
-        passengers: 120,
-        purpose: "private",
-        source: "manual",
-        kind: "outbound",
-      },
-    ],
-    { ...defaultAssignmentConfig(), ...serviceDay(project) },
-  );
+  const rows = [
+    {
+      datasetId: project.datasetId!,
+      start: at(11),
+      end: at(12),
+      arrivalDirection: "down",
+      origin: "s0",
+      destination: "s4",
+      passengers: 120,
+      purpose: "private",
+      source: "manual",
+      kind: "outbound",
+    },
+  ] as const;
+  const config = { ...defaultAssignmentConfig(), ...serviceDay(project) };
+  const result = assignDestinationArrivals(index, [...rows], config);
   expect(result.loads.map(({ segmentLoads }) => segmentLoads[0])).toEqual([
     50, 70,
   ]);
   expect(result.totals.unassigned).toBe(0);
+  const shares = Array<number>(24).fill(0);
+  shares[11] = 100;
+  const smoothed = assignDestinationArrivals(
+    index,
+    [...rows],
+    config,
+    undefined,
+    { up: shares, down: shares },
+  );
+  expect(smoothed.loads[0].segmentLoads[0]).toBeCloseTo(41.5933641975);
+  expect(smoothed.loads[1].segmentLoads[0]).toBeCloseTo(78.4066358025);
+  expect(smoothed.diagnostics.hourlyArrivals?.down[11]).toBeCloseTo(120);
+  expect(smoothed.totals.unassigned).toBe(0);
 });
 
 it("validates each direction independently and provides hourly defaults totaling 100%", () => {
@@ -136,4 +152,48 @@ it("validates each direction independently and provides hourly defaults totaling
   expect(() => estimateLineDemand(project, "weekday")).toThrow(
     "下りの目的地到着割合を合計100%",
   );
+});
+
+it("smooths across hour boundaries without changing each hour's area or adding demand to a zero hour", () => {
+  const shares = [10, 30, 0, 20];
+  const curves = hourlyDemandCurve(shares, true);
+  for (const [i, curve] of curves.entries()) {
+    expect(demandRate(curve, 1)).toBe(
+      demandRate(curves[(i + 1) % curves.length], 0),
+    );
+    const parts = Array.from({ length: 4 }, (_, j) =>
+      demandMass(curve, at(i, j * 15), at(i, (j + 1) * 15)),
+    );
+    expect(parts.every((v) => v >= 0)).toBe(true);
+    expect(parts.reduce((a, b) => a + b, 0)).toBeCloseTo(shares[i], 10);
+  }
+  expect(demandRate(curves[2], 0.5)).toBe(0);
+});
+
+it("uses the smoothed curve for an arrival hour split by the service day boundary", () => {
+  const project = sampleProject();
+  project.oud2 = {
+    fileType: "OuDiaSecond.1.07",
+    serviceDayStart: at(4, 15),
+    positions: [],
+    links: [],
+    externalTerminals: [],
+    emptyColumns: 0,
+    warnings: [],
+  };
+  const demand = (project.lineDemand = defaultLineDemand(true));
+  const shares = Array<number>(24).fill(0);
+  shares[4] = 100;
+  demand.destinationArrival = {
+    enabled: true,
+    smooth: true,
+    shares: { up: shares, down: shares },
+  };
+  const plan = estimateLineDemand(project, "weekday");
+  const tail = plan.rows
+    .filter((row) => row.start === at(28))
+    .reduce((sum, row) => sum + row.passengers, 0);
+  const total = plan.rows.reduce((sum, row) => sum + row.passengers, 0);
+  expect(tail / total).toBeCloseTo(0.103515625);
+  expect(total).toBeCloseTo(90000);
 });

@@ -33,7 +33,8 @@ const bandLabels = [
   "非常に混雑",
   "極度の混雑",
 ];
-const zoomLevels = [40, 80, 160, 320, 640];
+const defaultZoom = 640;
+const zoomLevels = [40, 80, 160, 320, defaultZoom];
 type DisplayDirection = Direction | "all";
 type DiagramSettings = DiagramRenderSettings & { direction: DisplayDirection };
 const directions = { all: "上下両方向", up: "上り", down: "下り" };
@@ -171,7 +172,7 @@ export function mountDiagram(
         )
         .join("")}</select></label>
       <label>スジ線の太さ<input id="diagram-line-width" type="range" min="${lineWidthRange.min}" max="${lineWidthRange.max}" step="${lineWidthRange.step}" value="${settings.lineWidth}" aria-valuetext="${n(settings.lineWidth)} ピクセル"><output id="diagram-line-width-value" for="diagram-line-width" aria-hidden="true">${n(settings.lineWidth)} px</output></label>
-      <label>時間軸<select id="diagram-zoom">${zoomLevels.map((z) => `<option value="${z}" ${z === 160 ? "selected" : ""}>${(z / 160) * 100}%</option>`).join("")}</select></label>
+      <label>時間軸<select id="diagram-zoom">${zoomLevels.map((z) => `<option value="${z}" ${z === defaultZoom ? "selected" : ""}>${(z / defaultZoom) * 100}%</option>`).join("")}</select></label>
       ${compact ? "" : `<button data-page="9">${result ? "配分結果・条件を確認" : "旅客配分を計算"}</button>`}
     </div>
     <p class="muted">${result ? `配分推計・${result.diagnostics?.hourlyArrivals ? "目的地到着順" : result.config.method === "logit" ? "ロジット" : "最短所要時間"}／定員制約${result.capacity ? "あり" : "なし"}・${result.diagnostics?.hourlyArrivals ? "目的地への到着時間帯" : "需要時間窓"} ${clock(result.config.start)}–${clock(result.config.end)}` : "配分結果なし。駅利用者数・営業区分・輸送定員を設定して計算してください。"} 駅は${routes.length > 1 ? "選択した経路順" : "登録順"}・等間隔。通過時刻を省略した駅は前後の記録時刻を結びます。停車駅の時刻が欠ける区間は破線で表示。</p>
@@ -209,7 +210,7 @@ export function mountDiagram(
   const segmentSelect = find<HTMLSelectElement>("#diagram-section");
   const lineWidth = find<HTMLInputElement>("#diagram-line-width");
   const lineWidthValue = find<HTMLOutputElement>("#diagram-line-width-value");
-  let zoom = 160,
+  let zoom = defaultZoom,
     selected = "",
     active: DiagramSegment | undefined,
     visible: VisibleLine[] = [];

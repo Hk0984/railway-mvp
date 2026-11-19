@@ -1,5 +1,6 @@
 import { clock, trainVisits } from "./analysis";
 import type { AssignmentDemand } from "./assignment-model";
+import { demandMass, hourlyDemandCurve } from "./hourly-demand-curve";
 import { isPassengerTrain } from "./classification";
 import type { Direction, Project, Timetable, Train } from "./model";
 
@@ -35,6 +36,7 @@ export interface LineDemand {
     Partial<Record<"inbound" | "outbound", number[]>>;
   destinationArrival?: {
     enabled: boolean;
+    smooth?: boolean;
     shares: Record<Direction, number[]>;
   };
   outside: OutsideArea[];
@@ -103,7 +105,11 @@ export function validateLineDemand(project: Project) {
   }
   if (d.destinationArrival !== undefined) {
     const arrival = d.destinationArrival;
-    if (typeof arrival?.enabled !== "boolean" || !arrival.shares)
+    if (
+      typeof arrival?.enabled !== "boolean" ||
+      !arrival.shares ||
+      (arrival.smooth !== undefined && typeof arrival.smooth !== "boolean")
+    )
       throw new Error("目的地到着の設定形式を確認してください");
     for (const direction of arrivalDirections) {
       const shares = arrival.shares[direction];
@@ -307,6 +313,20 @@ export function estimateLineDemand(project: Project, diaId: string) {
     ? settings.destinationArrival
     : undefined;
   const windows = arrival ? hourlyWindows(start, end) : timeWindows(start, end);
+  const curves = arrival?.smooth
+    ? {
+        up: hourlyDemandCurve(arrival.shares.up, true),
+        down: hourlyDemandCurve(arrival.shares.down, true),
+      }
+    : undefined;
+  const windowWeights = curves && {
+    up: windows.map((intervals, i) =>
+      intervals.map((w) => demandMass(curves.up[i], w.start, w.end)),
+    ),
+    down: windows.map((intervals, i) =>
+      intervals.map((w) => demandMass(curves.down[i], w.start, w.end)),
+    ),
+  };
   const directionFor = arrival ? arrivalDirectionFor(project) : undefined;
   const byArrival = arrival
     ? {
@@ -342,8 +362,11 @@ export function estimateLineDemand(project: Project, diaId: string) {
       if (!volume) continue;
       if (byArrival && direction) byArrival[direction][i] += volume;
       else byTime[i] += volume;
-      const duration = total(intervals.map((w) => w.end - w.start));
-      for (const w of intervals)
+      const weights =
+        (direction && windowWeights?.[direction][i]) ??
+        intervals.map((w) => w.end - w.start);
+      const weightSum = total(weights);
+      for (const [j, w] of intervals.entries())
         rows.push({
           datasetId: project.datasetId!,
           origin,
@@ -352,7 +375,7 @@ export function estimateLineDemand(project: Project, diaId: string) {
           source: "estimated",
           purpose: "private",
           kind: "outbound",
-          passengers: (volume * (w.end - w.start)) / duration,
+          passengers: (volume * weights[j]) / weightSum,
           ...(direction && { arrivalDirection: direction }),
           ...(trains &&
             (flow === "inbound"

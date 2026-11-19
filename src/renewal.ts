@@ -28,7 +28,7 @@ import {
   areaCard,
   readDemand,
   settingsBody,
-  updateArrivalTotals,
+  updateArrivalPreview,
   updateDemandTiming,
 } from "./renewal-settings";
 import { sampleProject } from "./sample";
@@ -128,6 +128,8 @@ function render() {
       }
     </main>`;
   if (page === "route" && searched) search();
+  if (page === "settings")
+    updateDemandTiming(app.querySelector("#settings-form")!);
   if (page === "diagram")
     disposeDiagram = mountDiagram(
       app.querySelector("#train-diagram")!,
@@ -201,6 +203,7 @@ function demandPreview() {
           ? "<p>以前保存した時間帯別ODを使用します。駅利用者数を登録すると新しい推計に切り替わります。</p>"
           : `
         ${timeSummary}
+        ${byArrival && project.lineDemand?.destinationArrival?.smooth ? '<p class="muted">時間内の到着需要を曲線で補間しています。</p>' : ""}
         <p>路線外の配分対象　流入 ${n(external.inbound)}人・流出 ${n(external.outbound)}人</p>
         ${dominant ? `<p>主な行先　${dominant}</p>` : ""}
         ${Math.abs(dailyBoard - dailyAlight) > 0.01 ? `<p class="muted">内数調整後の駅別合計　乗車 ${n(dailyBoard)}人・降車 ${n(dailyAlight)}人。降車人数は行先の重みに使います。</p>` : ""}
@@ -417,6 +420,11 @@ function calculate() {
     config,
     compare: false,
     forDiagram: true,
+    smoothedArrivalShares:
+      lineDemand?.destinationArrival?.enabled &&
+      lineDemand.destinationArrival.smooth
+        ? lineDemand.destinationArrival.shares
+        : undefined,
   });
   render();
 }
@@ -464,7 +472,8 @@ app.addEventListener("input", (event) => {
       row.hidden = !row.dataset.trainRow!.toLowerCase().includes(query);
   } else if (input.closest("#settings-form")) {
     dirty = true;
-    if (input.name.startsWith("arr-hour-")) updateArrivalTotals(input.form!);
+    if (input.name.startsWith("arr-hour-") || input.name === "arrival-smooth")
+      updateArrivalPreview(input.form!);
     refreshSaveBar();
   } else if (input.closest("#journey-form")) {
     route = readRoute(input.closest("form")!);

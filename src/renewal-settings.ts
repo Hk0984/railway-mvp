@@ -1,3 +1,4 @@
+import { drawHourlyDemand } from "./hourly-demand-preview";
 import { capacitySpec } from "./capacity-model";
 import {
   classLabels,
@@ -51,11 +52,18 @@ function destinationArrivalFields(project: Project, demand: LineDemand) {
     up: baseline,
     down: baseline,
   };
+  const hours = arrivalHours(project);
   return `
     <p class="muted">1日の到着需要を上り・下りそれぞれ100%に振り分けます。乗換がある場合は目的地に着く列車の方向を使います。路線外への流出は接続駅への到着時刻で集計します。</p>
+    <label class="check"><input type="checkbox" name="arrival-smooth" ${demand.destinationArrival?.smooth ? "checked" : ""}> 到着需要をなだらかに補間</label>
+    <p class="muted">各1時間の合計割合を保ち、時間内の配分に曲線を使います。</p>
+    <div class="arrival-preview">
+      <p class="arrival-preview-key muted"><span>上り</span><span>下り</span><span>1時間あたりの到着割合（%）</span></p>
+      <canvas data-arrival-preview="${hours[0].index}" role="img" aria-label="上り・下りの到着需要の推移" width="720" height="144"></canvas>
+    </div>
     <div class="table-scroll arrival-hour-grid">
       <table><thead><tr><th scope="col">目的地への到着時刻</th><th scope="col">上り（%）</th><th scope="col">下り（%）</th></tr></thead>
-      <tbody>${arrivalHours(project)
+      <tbody>${hours
         .map(
           ({ index, label }) =>
             `<tr><th scope="row">${label}</th>${arrivalDirections
@@ -78,21 +86,34 @@ export function updateDemandTiming(form: HTMLFormElement) {
     form.querySelectorAll<HTMLFieldSetElement>("[data-demand-timing]"),
   ))
     panel.hidden = panel.disabled = panel.dataset.demandTiming !== mode;
-  updateArrivalTotals(form);
+  if (mode === "arrival") updateArrivalPreview(form);
 }
-export function updateArrivalTotals(form: HTMLFormElement) {
+export function updateArrivalPreview(form: HTMLFormElement) {
+  const shares = { up: [] as number[], down: [] as number[] };
   for (const dir of arrivalDirections) {
+    const values = shares[dir];
     const fields = Array.from(
       form.querySelectorAll<HTMLInputElement>(`[name^="arr-hour-${dir}-"]`),
     );
-    const total = fields.reduce(
-      (sum, field) => sum + (Number(field.value) || 0),
-      0,
-    );
+    for (const field of fields)
+      values[Number(field.name.slice(("arr-hour-" + dir + "-").length))] =
+        Math.max(0, field.valueAsNumber || 0);
+    const total = values.reduce((sum, value) => sum + value, 0);
     form.querySelector<HTMLOutputElement>(
       `[data-arrival-total="${dir}"]`,
     )!.value = `${n(total, 4)}%`;
   }
+  const canvas = form.querySelector<HTMLCanvasElement>(
+    "[data-arrival-preview]",
+  )!;
+  const smooth = (form.elements.namedItem("arrival-smooth") as HTMLInputElement)
+    .checked;
+  drawHourlyDemand(
+    canvas,
+    shares,
+    Number(canvas.dataset.arrivalPreview),
+    smooth,
+  );
 }
 
 export function areaCard(
@@ -239,6 +260,7 @@ export function readDemand(
   const destinationArrival = byArrival
     ? {
         enabled: true,
+        smooth: fields.has("arrival-smooth"),
         shares: {
           up: Array.from({ length: arrivalHourCount }, (_, i) =>
             Number(str("arr-hour-up-" + i)),

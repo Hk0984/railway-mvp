@@ -3,6 +3,7 @@ import { buildRoutingIndex } from "./routing";
 import { assignDemand } from "./assignment";
 import { assignDestinationArrivals } from "./destination-assignment";
 import { lineAssignmentProfile } from "./line-assignment-profile";
+import type { Direction } from "./model";
 import type { DatasetSelection, TransferLink } from "./routing-model";
 import type {
   AssignmentDemand,
@@ -17,6 +18,7 @@ self.onmessage = (
     config: AssignmentConfig;
     compare: boolean;
     forDiagram?: boolean;
+    smoothedArrivalShares?: Record<Direction, number[]>;
     compareCapacity?: boolean;
   }>,
 ) => {
@@ -31,6 +33,7 @@ self.onmessage = (
         p.input,
         p.config,
         (done, total) => self.postMessage({ type: "progress", done, total }),
+        p.smoothedArrivalShares,
       );
       self.postMessage({ type: "result", results: [result] });
       return;

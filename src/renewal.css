@@ -320,6 +320,31 @@ th small {
   margin: 0.8rem 0 0;
   min-inline-size: 0;
 }
+.arrival-preview {
+  max-width: 48rem;
+  margin: 0.6rem 0;
+}
+.arrival-preview-key {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 0.85rem;
+}
+.arrival-preview-key span:nth-child(-n + 2)::before {
+  display: inline-block;
+  content: "";
+  margin: 0 0.25rem 0.2rem 0;
+  width: 1.2rem;
+  border-top: 2px solid #006751;
+}
+.arrival-preview-key span:nth-child(2)::before {
+  border-top: 2px dashed #783e81;
+}
+.arrival-preview canvas {
+  display: block;
+  width: 100%;
+  height: auto;
+  margin-top: 0.35rem;
+}
 .arrival-hour-grid {
   max-height: 23rem;
   margin: 0.65rem 0;

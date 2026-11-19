@@ -50,6 +50,13 @@ try {
   const strokeWidth = page.getByRole("slider", { name: "スジ線の太さ" });
   assert.equal(await displayDirection.inputValue(), "all");
   assert.equal(await strokeWidth.inputValue(), "1.2");
+  const zoom = page.locator("#diagram-zoom");
+  assert.equal(await zoom.inputValue(), "640");
+  assert.equal(await zoom.locator("option:checked").innerText(), "100%");
+  assert.equal(await zoom.locator('option[value="160"]').innerText(), "25%");
+  await zoom.selectOption("160");
+  assert.equal(await zoom.locator("option:checked").innerText(), "25%");
+  await zoom.selectOption("640");
   await page.getByRole("button", { name: "混雑を計算" }).click();
   await page.getByText("計算完了", { exact: true }).waitFor();
   await page.locator("#diagram-train").selectOption("down-8");
@@ -154,12 +161,29 @@ try {
     .filter({ hasText: "上りの目的地到着割合を合計100%" })
     .waitFor();
   await upEleven.fill("100");
+  const curve = page.getByRole("img", { name: "上り・下りの到着需要の推移" });
+  const unsmoothed = await curve.evaluate((canvas) => canvas.toDataURL());
+  const smoothing = page.getByRole("checkbox", {
+    name: "到着需要をなだらかに補間",
+  });
+  await smoothing.check();
+  assert.notEqual(
+    await curve.evaluate((canvas) => canvas.toDataURL()),
+    unsmoothed,
+  );
+  assert.equal(
+    await page.locator('[data-arrival-total="up"]').textContent(),
+    "100%",
+  );
   await page.getByRole("button", { name: "設定を保存", exact: true }).click();
   await page.getByText("設定を保存しました", { exact: true }).waitFor();
   await page.getByRole("link", { name: "混雑ダイヤ図" }).click();
   await page.getByRole("button", { name: "混雑を計算" }).click();
   await page.getByText("計算完了", { exact: true }).waitFor();
   await page.locator("#demand-preview summary").click();
+  await page
+    .getByText("時間内の到着需要を曲線で補間しています。", { exact: true })
+    .waitFor();
   const arrivalRow = (time) =>
     page
       .locator("#demand-preview tr")
@@ -178,6 +202,7 @@ try {
   await page.reload();
   assert.equal(await timeBasis.inputValue(), "arrival");
   assert.equal(await upEleven.inputValue(), "100");
+  assert.equal(await smoothing.isChecked(), true);
   assert.equal(await downNoon.inputValue(), "100");
   assert.equal(
     await page.getByPlaceholder("都心方面").inputValue(),
@@ -217,7 +242,7 @@ try {
   );
   assert.deepEqual(errors, []);
   console.log(
-    "Renewal smoke passed: route, worker, haze, direction, stroke width, hourly destination arrivals, external trains, save/reload, OuDia2nd, midnight, mobile",
+    "Renewal smoke passed: route, worker, haze, direction, stroke width, zoom scale, smoothed hourly destination arrivals, external trains, save/reload, OuDia2nd, midnight, mobile",
   );
 } finally {
   await context.close();
