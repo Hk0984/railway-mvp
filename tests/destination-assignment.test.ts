@@ -135,8 +135,8 @@ it("assigns the whole hour to timed arrivals and divides multiple arrivals at th
     undefined,
     { up: shares, down: shares },
   );
-  expect(smoothed.loads[0].segmentLoads[0]).toBeCloseTo(41.5933641975);
-  expect(smoothed.loads[1].segmentLoads[0]).toBeCloseTo(78.4066358025);
+  expect(smoothed.loads[0].segmentLoads[0]).toBeCloseTo(43.3333333333);
+  expect(smoothed.loads[1].segmentLoads[0]).toBeCloseTo(76.6666666667);
   expect(smoothed.diagnostics.hourlyArrivals?.down[11]).toBeCloseTo(120);
   expect(smoothed.totals.unassigned).toBe(0);
 });
@@ -170,6 +170,51 @@ it("smooths across hour boundaries without changing each hour's area or adding d
   expect(demandRate(curves[2], 0.5)).toBe(0);
 });
 
+it("joins hours with a single rise or fall, including equal-hour values and midnight", () => {
+  for (const shares of [
+    [4, 12, 20, 30, 13, 7],
+    [5, 25, 25, 5],
+    [0.5, 30, 0, 0.01, 50, 0.4],
+  ]) {
+    const curves = hourlyDemandCurve(shares, true);
+    for (const [i, curve] of curves.entries()) {
+      const next = curves[(i + 1) % curves.length];
+      const rates = [
+        ...[0.9, 0.95, 0.99, 1].map((t) => demandRate(curve, t)),
+        ...[0, 0.01, 0.05, 0.1].map((t) => demandRate(next, t)),
+      ];
+      const direction = Math.sign(rates.at(-1)! - rates[0]);
+      expect(rates.every((v) => Number.isFinite(v) && v >= 0)).toBe(true);
+      expect(rates[3]).toBeCloseTo(rates[4], 12);
+      for (const [j, rate] of rates.slice(1).entries()) {
+        if (direction === 0) expect(rate).toBeCloseTo(rates[0], 10);
+        else
+          expect((rate - rates[j]) * direction).toBeGreaterThanOrEqual(-1e-10);
+      }
+
+      // Simpson's rule integrates each cubic segment of the plotted rate exactly.
+      const boundaries = [
+        0,
+        curve.opening?.width ?? 0,
+        1 - (curve.closing?.width ?? 0),
+        1,
+      ];
+      const area = boundaries.slice(1).reduce((sum, end, j) => {
+        const start = boundaries[j];
+        return (
+          sum +
+          ((end - start) *
+            (demandRate(curve, start) +
+              4 * demandRate(curve, (start + end) / 2) +
+              demandRate(curve, end))) /
+            6
+        );
+      }, 0);
+      expect(area).toBeCloseTo(shares[i], 10);
+    }
+  }
+});
+
 it("uses the smoothed curve for an arrival hour split by the service day boundary", () => {
   const project = sampleProject();
   project.oud2 = {
@@ -194,6 +239,6 @@ it("uses the smoothed curve for an arrival hour split by the service day boundar
     .filter((row) => row.start === at(28))
     .reduce((sum, row) => sum + row.passengers, 0);
   const total = plan.rows.reduce((sum, row) => sum + row.passengers, 0);
-  expect(tail / total).toBeCloseTo(0.103515625);
+  expect(tail / total).toBeCloseTo(0.1118977864583);
   expect(total).toBeCloseTo(90000);
 });

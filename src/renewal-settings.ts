@@ -56,7 +56,7 @@ function destinationArrivalFields(project: Project, demand: LineDemand) {
   return `
     <p class="muted">1日の到着需要を上り・下りそれぞれ100%に振り分けます。乗換がある場合は目的地に着く列車の方向を使います。路線外への流出は接続駅への到着時刻で集計します。</p>
     <label class="check"><input type="checkbox" name="arrival-smooth" ${demand.destinationArrival?.smooth ? "checked" : ""}> 到着需要をなだらかに補間</label>
-    <p class="muted">各1時間の合計割合を保ち、時間内の配分に曲線を使います。</p>
+    <p class="muted">各1時間の合計割合を保ち、時刻の境目をひと続きの増減でつなぎます。</p>
     <div class="arrival-preview">
       <p class="arrival-preview-key muted"><span>上り</span><span>下り</span><span>1時間あたりの到着割合（%）</span></p>
       <canvas data-arrival-preview="${hours[0].index}" role="img" aria-label="上り・下りの到着需要の推移" width="720" height="144"></canvas>
