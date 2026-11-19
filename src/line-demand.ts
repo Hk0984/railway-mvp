@@ -36,7 +36,7 @@ export interface LineDemand {
 export function defaultLineDemand(sample = false): LineDemand {
   const counts = sample
     ? Object.fromEntries(
-        [9600, 5700, 8200, 7100, 5400].map((number, i) => [
+        [24000, 14250, 20500, 17750, 13500].map((number, i) => [
           `s${i}`,
           { board: number, alight: number, weight: 1 },
         ]),

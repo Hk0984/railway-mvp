@@ -169,6 +169,11 @@ export function mountDiagram(
     root.querySelector<T>(selector)!;
   const scroll = find<HTMLDivElement>(".diagram-scroll");
   const spacer = find<HTMLDivElement>(".diagram-size");
+  if (compact)
+    scroll.style.setProperty(
+      "--plot-content-height",
+      `${plotTop + (stations.length + 1) * rowHeight + 20}px`,
+    );
   const canvas = find<HTMLCanvasElement>("canvas");
   const ctx = canvas.getContext("2d")!;
   const haze = document.createElement("canvas").getContext("2d")!;

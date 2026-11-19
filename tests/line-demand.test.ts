@@ -61,9 +61,9 @@ describe("single-line demand", () => {
     expect(plan.external.inbound).toBeCloseTo(35);
     expect(plan.external.outbound).toBeCloseTo(15);
     expect(plan.destinations.get("都心方面")).toBeCloseTo(15);
-    expect(total(plan.rows)).toBeCloseTo(36000);
-    expect(plan.byTime[0]).toBeCloseTo((36000 - 35) * 0.4 + 35);
-    p.lineDemand.outside[0].inbound = 10000;
+    expect(total(plan.rows)).toBeCloseTo(90000);
+    expect(plan.byTime[0]).toBeCloseTo((90000 - 35) * 0.4 + 35);
+    p.lineDemand.outside[0].inbound = p.lineDemand.counts.s0.board + 1;
     expect(() => estimateLineDemand(p, "weekday")).toThrow("内数");
   });
 

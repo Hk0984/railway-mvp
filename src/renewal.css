@@ -558,7 +558,7 @@ th small {
   font-size: 0.81rem;
 }
 #train-diagram .diagram-scroll {
-  height: min(57vh, 625px);
+  height: min(57vh, 625px, max(260px, var(--plot-content-height, 625px)));
   border-color: var(--line);
 }
 #train-diagram .diagram-details {
