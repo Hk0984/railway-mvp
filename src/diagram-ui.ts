@@ -17,11 +17,11 @@ import {
   plotLeft,
   plotTop,
   rowHeight,
-  type HazeSettings,
+  type DiagramRenderSettings,
   type PlotLine,
   type VisibleLine,
 } from "./diagram-render";
-import type { Project } from "./model";
+import type { Direction, Project } from "./model";
 import { escapeHtml as e, numberText as n } from "./ui-utils";
 
 const routeSelection = new WeakMap<Project, number>();
@@ -34,7 +34,13 @@ const bandLabels = [
   "極度の混雑",
 ];
 const zoomLevels = [40, 80, 160, 320, 640];
-const defaultSettings = {
+type DisplayDirection = Direction | "all";
+type DiagramSettings = DiagramRenderSettings & { direction: DisplayDirection };
+const directions = { all: "上下両方向", up: "上り", down: "下り" };
+const lineWidthRange = { min: 0.4, max: 4, step: 0.1 };
+const defaultSettings: DiagramSettings = {
+  direction: "all",
+  lineWidth: 1.2,
   enabled: true,
   selectedOnly: false,
   width: 9,
@@ -48,7 +54,17 @@ function validLimits(limits: number[]) {
     limits.every((v, i) => Number.isFinite(v) && v > (limits[i - 1] ?? 0))
   );
 }
-function readSettings(): HazeSettings {
+function displayDirection(value: unknown): DisplayDirection {
+  return value === "up" || value === "down" ? value : "all";
+}
+function validLineWidth(value: unknown): value is number {
+  return (
+    typeof value === "number" &&
+    value >= lineWidthRange.min &&
+    value <= lineWidthRange.max
+  );
+}
+function readSettings(): DiagramSettings {
   const defaults = structuredClone(defaultSettings);
   try {
     const saved = JSON.parse(localStorage.getItem(storageKey) ?? "null");
@@ -70,7 +86,13 @@ function readSettings(): HazeSettings {
         (v: unknown) => typeof v === "string" && /^#[a-f\d]{6}$/i.test(v),
       )
     )
-      return saved;
+      return {
+        ...saved,
+        direction: displayDirection(saved.direction),
+        lineWidth: validLineWidth(saved.lineWidth)
+          ? saved.lineWidth
+          : defaults.lineWidth,
+      };
   } catch {
     // The diagram also works when browser storage is unavailable.
   }
@@ -90,7 +112,11 @@ export function mountDiagram(
 ) {
   const settings = readSettings();
   if (compact)
-    Object.assign(settings, defaultSettings, { enabled: settings.enabled });
+    Object.assign(settings, defaultSettings, {
+      enabled: settings.enabled,
+      direction: settings.direction,
+      lineWidth: settings.lineWidth,
+    });
   const names = new Map(project.stations.map((s) => [s.id, s.name]));
   const types = new Map(project.types.map((t, i) => [t.id, i]));
   const trains = diagramTrains(project, diaId, result).filter(
@@ -136,6 +162,13 @@ export function mountDiagram(
       <label>表示対象<select id="diagram-scope"><option value="all">全列車</option><option value="selected" ${settings.selectedOnly ? "selected" : ""}>選択列車のみ</option></select></label>`
       }
       ${routes.length > 1 ? `<label>表示経路<select id="diagram-route">${routes.map((r, i) => `<option value="${i}" ${i === routeIndex ? "selected" : ""}>${e(station(r[0]))} → ${e(station(r.at(-1)!))}</option>`).join("")}</select></label>` : ""}
+      <label><span id="diagram-direction-label">表示方向</span><select id="diagram-direction" aria-labelledby="diagram-direction-label">${Object.entries(directions)
+        .map(
+          ([value, label]) =>
+            `<option value="${value}" ${value === settings.direction ? "selected" : ""}>${label}</option>`,
+        )
+        .join("")}</select></label>
+      <label>スジ線の太さ<input id="diagram-line-width" type="range" min="${lineWidthRange.min}" max="${lineWidthRange.max}" step="${lineWidthRange.step}" value="${settings.lineWidth}" aria-valuetext="${n(settings.lineWidth)} ピクセル"><output id="diagram-line-width-value" for="diagram-line-width" aria-hidden="true">${n(settings.lineWidth)} px</output></label>
       <label>時間軸<select id="diagram-zoom">${zoomLevels.map((z) => `<option value="${z}" ${z === 160 ? "selected" : ""}>${(z / 160) * 100}%</option>`).join("")}</select></label>
       ${compact ? "" : `<button data-page="9">${result ? "配分結果・条件を確認" : "旅客配分を計算"}</button>`}
     </div>
@@ -153,7 +186,7 @@ export function mountDiagram(
       <div class="diagram-size" aria-hidden="true"></div>
       <canvas role="img" aria-label="横軸は運行日の時刻、縦軸は駅。下の列車と区間の選択から数値を確認できます。"></canvas>
     </div>
-    ${trains.length ? "" : '<p class="muted">表示できる列車時刻がありません。</p>'}
+    <p id="diagram-empty" class="muted" role="status" hidden>選択した表示条件に該当する列車がありません。</p>
     <div class="diagram-controls">
       <label>列車<select id="diagram-train"><option value="">選択してください</option></select></label>
       <label>区間<select id="diagram-section" disabled><option value="">選択してください</option></select></label>
@@ -172,6 +205,8 @@ export function mountDiagram(
   let haze = document.createElement("canvas").getContext("2d")!;
   const trainSelect = find<HTMLSelectElement>("#diagram-train");
   const segmentSelect = find<HTMLSelectElement>("#diagram-section");
+  const lineWidth = find<HTMLInputElement>("#diagram-line-width");
+  const lineWidthValue = find<HTMLOutputElement>("#diagram-line-width-value");
   let zoom = 160,
     selected = "",
     active: DiagramSegment | undefined,
@@ -187,6 +222,11 @@ export function mountDiagram(
     const lines: PlotLine[] = [];
     const shown = [];
     for (const service of trains) {
+      if (
+        settings.direction !== "all" &&
+        service.train.direction !== settings.direction
+      )
+        continue;
       let hasLine = false;
       for (const segment of service.segments) {
         const y1 = rows.get(segment.from.stationId);
@@ -209,7 +249,7 @@ export function mountDiagram(
     }
     visibleSegments = new Set(lines.map((line) => line.segment));
     query = indexPlot(lines);
-    // The view coordinates may match another route, but its haze cannot be reused.
+    // The route or direction changed, so the cached haze belongs to different lines.
     haze = document.createElement("canvas").getContext("2d")!;
     trainSelect.innerHTML =
       '<option value="">選択してください</option>' +
@@ -219,6 +259,7 @@ export function mountDiagram(
             `<option value="${e(train.id)}">${e(train.number || train.id)} ／ ${e(project.types[types.get(train.typeId) ?? -1]?.name ?? train.typeId)} ／ ${train.direction === "up" ? "上り" : "下り"}</option>`,
         )
         .join("");
+    find("#diagram-empty").hidden = shown.length > 0;
     const id = Array.from(trainSelect.options).some(
       (option) => option.value === selected,
     )
@@ -451,6 +492,13 @@ export function mountDiagram(
       routeSelection.set(project, routeIndex);
       scroll.scrollTop = 0;
       showRoute();
+    } else if (target.id === "diagram-direction") {
+      settings.direction = displayDirection(target.value);
+      showRoute();
+      saveSettings();
+    } else if (target === lineWidth) {
+      updateLineWidth();
+      saveSettings();
     } else if (target.id === "diagram-zoom") {
       const prior = zoom;
       const left = scroll.scrollLeft;
@@ -464,12 +512,28 @@ export function mountDiagram(
     if (!compact) readAdvancedSettings();
     legend();
     redraw();
+    saveSettings();
+  }
+  function updateLineWidth() {
+    const width = lineWidth.valueAsNumber;
+    if (!validLineWidth(width)) return;
+    settings.lineWidth = width;
+    lineWidthValue.value = `${n(width)} px`;
+    lineWidth.setAttribute("aria-valuetext", `${n(width)} ピクセル`);
+    redraw();
+  }
+  function saveSettings() {
     try {
       if (compact) {
         const saved = readSettings();
         localStorage.setItem(
           storageKey,
-          JSON.stringify({ ...saved, enabled: settings.enabled }),
+          JSON.stringify({
+            ...saved,
+            enabled: settings.enabled,
+            direction: settings.direction,
+            lineWidth: settings.lineWidth,
+          }),
         );
       } else localStorage.setItem(storageKey, JSON.stringify(settings));
     } catch {
@@ -499,7 +563,8 @@ export function mountDiagram(
   }
   root.addEventListener("input", (event) => {
     const target = event.target as HTMLInputElement;
-    if (
+    if (target === lineWidth) updateLineWidth();
+    else if (
       target.type === "range" ||
       target.type === "color" ||
       target.dataset.hazeLimit !== undefined

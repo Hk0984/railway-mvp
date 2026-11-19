@@ -32,7 +32,8 @@ export interface PlotView {
   start: number;
   pixelsPerHour: number;
 }
-export interface HazeSettings {
+export interface DiagramRenderSettings {
+  lineWidth: number;
   enabled: boolean;
   selectedOnly: boolean;
   width: number;
@@ -84,7 +85,7 @@ export function drawDiagram(
   view: PlotView,
   stationNames: string[],
   candidates: Iterable<PlotLine>,
-  settings: HazeSettings,
+  settings: DiagramRenderSettings,
   selected: string,
   selectedSegment?: DiagramSegment,
 ) {
@@ -200,7 +201,7 @@ export function drawDiagram(
   }
 
   ctx.lineCap = "round";
-  ctx.lineWidth = 1.2;
+  ctx.lineWidth = settings.lineWidth;
   tracks.forEach((path, i) => {
     ctx.strokeStyle = typeColors[i];
     ctx.stroke(path);
@@ -213,12 +214,12 @@ export function drawDiagram(
     const line = visible.find((v) => v.segment.service.train.id === selected);
     if (line) {
       ctx.strokeStyle = typeColors[line.type % typeColors.length];
-      ctx.lineWidth = 2.6;
+      ctx.lineWidth = settings.lineWidth + 1.4;
       ctx.stroke(highlight);
       ctx.setLineDash([3, 4]);
       ctx.stroke(highlightGaps);
       ctx.setLineDash([]);
-      ctx.lineWidth = 4;
+      ctx.lineWidth = settings.lineWidth + 2.8;
       ctx.stroke(focus);
       ctx.font = "bold 12px sans-serif";
       ctx.fillStyle = ctx.strokeStyle;

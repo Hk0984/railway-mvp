@@ -13,6 +13,16 @@
   gap: 0.35rem;
   margin: 0;
 }
+#diagram-line-width {
+  width: clamp(5.25rem, 12vw, 8rem);
+  margin: 0;
+  accent-color: #006751;
+}
+#diagram-line-width-value {
+  min-width: 6ch;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
 .diagram-legend input[type="number"] {
   width: 5rem;
 }

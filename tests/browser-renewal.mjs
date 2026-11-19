@@ -31,7 +31,25 @@ try {
     await page.locator(".journey-card").first().innerText(),
     /[0-9]{2}:[0-9]{2}/,
   );
+  // Previous releases stored haze preferences without direction or stroke width.
+  await page.evaluate(() => {
+    localStorage.setItem(
+      "railway-lab.diagram-haze",
+      JSON.stringify({
+        enabled: true,
+        selectedOnly: false,
+        width: 9,
+        opacity: 0.55,
+        limits: [100, 130, 160, 200],
+        colors: ["#158c51", "#d7ab00", "#ed7c18", "#d93042", "#903bbe"],
+      }),
+    );
+  });
   await page.getByRole("link", { name: "混雑ダイヤ図" }).click();
+  const displayDirection = page.getByLabel("表示方向", { exact: true });
+  const strokeWidth = page.getByRole("slider", { name: "スジ線の太さ" });
+  assert.equal(await displayDirection.inputValue(), "all");
+  assert.equal(await strokeWidth.inputValue(), "1.2");
   await page.getByRole("button", { name: "混雑を計算" }).click();
   await page.getByText("計算完了", { exact: true }).waitFor();
   await page.locator("#diagram-train").selectOption("down-8");
@@ -54,9 +72,44 @@ try {
   await page.locator(".diagram-scroll").evaluate((el) => {
     el.scrollLeft = 250;
   });
+  const bothDirections = await pixels();
+  const trainChoices = () =>
+    page
+      .locator("#diagram-train option:not([value=''])")
+      .evaluateAll((options) => options.map((option) => option.value));
+  await displayDirection.selectOption("down");
+  assert.equal(await page.locator("#diagram-train").inputValue(), "down-8");
+  assert.equal(await page.locator("#diagram-section").inputValue(), "0");
+  let choices = await trainChoices();
+  assert.equal(choices.length, 36);
+  assert.ok(choices.every((id) => id.startsWith("down-")));
+  assert.notEqual(await pixels(), bothDirections);
+  await displayDirection.selectOption("up");
+  assert.equal(await page.locator("#diagram-train").inputValue(), "");
+  assert.equal(await page.locator("#diagram-section").isDisabled(), true);
+  choices = await trainChoices();
+  assert.equal(choices.length, 36);
+  assert.ok(choices.every((id) => id.startsWith("up-")));
+  assert.equal(
+    await page.locator(".diagram-scroll").evaluate((el) => el.scrollLeft),
+    250,
+  );
   const on = await pixels();
   await page.locator("#diagram-enabled").uncheck();
-  assert.notEqual(await pixels(), on);
+  const thin = await pixels();
+  assert.notEqual(thin, on);
+  await strokeWidth.press("End");
+  assert.equal(await strokeWidth.inputValue(), "4");
+  assert.equal(
+    await page.locator("#diagram-line-width-value").textContent(),
+    "4 px",
+  );
+  assert.notEqual(await pixels(), thin);
+  await page.getByText("計算完了", { exact: true }).waitFor();
+  await page.reload();
+  await displayDirection.waitFor();
+  assert.equal(await displayDirection.inputValue(), "up");
+  assert.equal(await strokeWidth.inputValue(), "4");
   await page.getByRole("link", { name: "データ設定" }).click();
   await page.getByRole("button", { name: "方面を追加" }).click();
   await page.getByPlaceholder("都心方面").fill("都心方面");
@@ -82,13 +135,11 @@ try {
   const fixture = await (
     await fetch(new URL("samples/basic-1.07.oud2", page.url()))
   ).arrayBuffer();
-  await page
-    .locator("#open-file")
-    .setInputFiles({
-      name: "basic-1.07.oud2",
-      mimeType: "text/plain",
-      buffer: Buffer.from(fixture),
-    });
+  await page.locator("#open-file").setInputFiles({
+    name: "basic-1.07.oud2",
+    mimeType: "text/plain",
+    buffer: Buffer.from(fixture),
+  });
   await page.getByText("basic-1.07.oud2 を読み込みました").waitFor();
   await page.locator("#active-dia").selectOption("oud-dia1");
   await page.getByRole("link", { name: "混雑ダイヤ図" }).click();
@@ -100,6 +151,13 @@ try {
     await page.locator("#diagram-segment-detail").innerText(),
     /23:50–24:10[\s\S]*未算出/,
   );
+  await displayDirection.selectOption("down");
+  await page
+    .getByText("選択した表示条件に該当する列車がありません。")
+    .waitFor();
+  assert.deepEqual(await trainChoices(), []);
+  await displayDirection.selectOption("all");
+  assert.deepEqual(await trainChoices(), ["oud-1-Nobori-0"]);
   await page.setViewportSize({ width: 390, height: 844 });
   assert.ok(
     await page.evaluate(
@@ -108,7 +166,7 @@ try {
   );
   assert.deepEqual(errors, []);
   console.log(
-    "Renewal smoke passed: route, worker, haze, external trains, save/reload, OuDia2nd, midnight, mobile",
+    "Renewal smoke passed: route, worker, haze, direction, stroke width, external trains, save/reload, OuDia2nd, midnight, mobile",
   );
 } finally {
   await context.close();
