@@ -13,7 +13,7 @@ import {
   type TransferLink,
 } from "./routing-model";
 
-interface Trip {
+export interface Trip {
   selection: DatasetSelection;
   train: Train;
   visits: Stop[];
@@ -21,13 +21,13 @@ interface Trip {
   refs: StationRef[];
   stationKeys: string[];
 }
-interface Board {
+export interface Board {
   id: number;
   trip: Trip;
   index: number;
   departure: number;
 }
-interface Ride {
+export interface Ride {
   trip: Trip;
   i: number;
   j: number;
@@ -78,7 +78,7 @@ export interface RoutingIndex {
 }
 const canBoard = (s: Stop) =>
   s.status === "stop" && s.pickupAllowed !== false && s.departure !== undefined;
-const canAlight = (s: Stop) =>
+export const canAlight = (s: Stop) =>
   s.status === "stop" && s.dropoffAllowed !== false && s.arrival !== undefined;
 const tripKey = (datasetId: string, dia: string, train: string) =>
   JSON.stringify([datasetId, dia, train]);
@@ -296,11 +296,11 @@ function chain(label: Label) {
   }
   return nodes.reverse();
 }
+export const rideKey = (ride: Ride, walkIds: string[] = []) =>
+  JSON.stringify([ride.trip.key, ride.i, ride.j, walkIds]);
 function signature(label: Label) {
   return chain(label)
-    .map((p) =>
-      JSON.stringify([p.ride.trip.key, p.ride.i, p.ride.j, p.walkIds]),
-    )
+    .map(({ ride, walkIds }) => rideKey(ride, walkIds))
     .join("");
 }
 function dominates(a: Label, b: Label, riding: boolean, choices = false) {
@@ -339,39 +339,54 @@ function insert(
   return true;
 }
 function materialize(l: Label, includeStops = true): Journey {
-  const nodes = chain(l),
-    transfers = nodes.flatMap((n) => (n.transfer ? [n.transfer] : []));
-  const legs: JourneyLeg[] = nodes.map(
-    ({ ride: { trip, i, j, departure, arrival } }) => {
-      const s = trip.selection;
-      return {
-        datasetId: s.datasetId,
-        timetableId: s.timetableId,
-        trainId: trip.train.id,
-        trainNumber: trip.train.number,
-        typeId: trip.train.typeId,
-        typeName: s.project.types.find((t) => t.id === trip.train.typeId)!.name,
-        origin: trip.refs[i],
-        destination: trip.refs[j],
-        departure,
-        arrival,
-        boardIndex: i,
-        alightIndex: j,
-        stops: includeStops
-          ? trip.visits.slice(i, j + 1).map((x) => ({ ...x }))
-          : [],
-      };
-    },
+  const nodes = chain(l);
+  return journeyFromRides(
+    nodes.map(({ ride }) => ride),
+    nodes.flatMap((n) => (n.transfer ? [n.transfer] : [])),
+    signature(l),
+    includeStops,
   );
+}
+export function journeyFromRides(
+  rides: Ride[],
+  transfers: JourneyTransfer[],
+  id: string,
+  includeStops = false,
+): Journey {
+  const legs: JourneyLeg[] = rides.map(({ trip, i, j, departure, arrival }) => {
+    const s = trip.selection;
+    return {
+      datasetId: s.datasetId,
+      timetableId: s.timetableId,
+      trainId: trip.train.id,
+      trainNumber: trip.train.number,
+      typeId: trip.train.typeId,
+      typeName: s.project.types.find((t) => t.id === trip.train.typeId)!.name,
+      origin: trip.refs[i],
+      destination: trip.refs[j],
+      departure,
+      arrival,
+      boardIndex: i,
+      alightIndex: j,
+      stops: includeStops
+        ? trip.visits.slice(i, j + 1).map((x) => ({ ...x }))
+        : [],
+    };
+  });
+  const departure = rides[0].departure,
+    arrival = rides.at(-1)!.arrival;
   return {
-    id: signature(l),
-    departure: l.departure,
-    arrival: l.arrival,
-    elapsedSeconds: l.arrival - l.departure,
-    ridingSeconds: l.riding,
-    walkingSeconds: l.walking,
+    id,
+    departure,
+    arrival,
+    elapsedSeconds: arrival - departure,
+    ridingSeconds: rides.reduce(
+      (sum, ride) => sum + ride.arrival - ride.departure,
+      0,
+    ),
+    walkingSeconds: transfers.reduce((sum, t) => sum + t.walkingSeconds, 0),
     transferWaitSeconds: transfers.reduce((s, t) => s + t.waitingSeconds, 0),
-    transferCount: l.depth - 1,
+    transferCount: rides.length - 1,
     legs,
     transfers,
     valid: true,

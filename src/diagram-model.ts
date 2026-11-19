@@ -1,5 +1,5 @@
 import { trainVisits } from "./analysis";
-import type { AssignmentResult, TrainLoad } from "./assignment-model";
+import type { DiagramAssignment, TrainLoad } from "./assignment-model";
 import type { Project, Stop, Train } from "./model";
 
 export const crowdingLimits = [100, 130, 160, 200];
@@ -42,7 +42,7 @@ export interface DiagramSegment {
 export function diagramTrains(
   p: Project,
   diaId: string,
-  result?: AssignmentResult,
+  result?: DiagramAssignment,
 ) {
   const horizon =
     result?.capacity?.horizon ??

@@ -110,7 +110,9 @@ export function drawDiagram(
   const reuseHaze = cached?.key === hazeKey;
   const bands =
     hazeKey && !reuseHaze ? settings.colors.map(() => new Path2D()) : [];
+  const gaps = new Path2D();
   const highlight = new Path2D();
+  const highlightGaps = new Path2D();
   const focus = new Path2D();
   let hazeSegments = 0;
   for (const line of candidates) {
@@ -125,10 +127,12 @@ export function drawDiagram(
       continue;
     const positioned = { ...line, x1, x2 };
     visible.push(positioned);
-    strokeLine(tracks[line.type % tracks.length], positioned, top);
+    const gap = line.segment.kind === "gap";
+    strokeLine(gap ? gaps : tracks[line.type % tracks.length], positioned, top);
     const active = line.segment.service.train.id === selected;
-    if (active) strokeLine(highlight, positioned, top);
-    if (line.segment === selectedSegment) strokeLine(focus, positioned, top);
+    if (active) strokeLine(gap ? highlightGaps : highlight, positioned, top);
+    if (line.segment === selectedSegment && !gap)
+      strokeLine(focus, positioned, top);
     if (bands.length && (!settings.selectedOnly || active)) {
       const band = crowdingBand(line.segment.percent, settings.limits);
       if (band >= 0) {
@@ -201,12 +205,19 @@ export function drawDiagram(
     ctx.strokeStyle = typeColors[i];
     ctx.stroke(path);
   });
+  ctx.setLineDash([3, 4]);
+  ctx.strokeStyle = "#667a80";
+  ctx.stroke(gaps);
+  ctx.setLineDash([]);
   if (selected) {
     const line = visible.find((v) => v.segment.service.train.id === selected);
     if (line) {
       ctx.strokeStyle = typeColors[line.type % typeColors.length];
       ctx.lineWidth = 2.6;
       ctx.stroke(highlight);
+      ctx.setLineDash([3, 4]);
+      ctx.stroke(highlightGaps);
+      ctx.setLineDash([]);
       ctx.lineWidth = 4;
       ctx.stroke(focus);
       ctx.font = "bold 12px sans-serif";

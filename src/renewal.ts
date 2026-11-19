@@ -2,7 +2,7 @@ import "./renewal.css";
 import { clock, trainVisits } from "./analysis";
 import {
   defaultAssignmentConfig,
-  type AssignmentResult,
+  type DiagramAssignment,
 } from "./assignment-model";
 import { transportCapacity } from "./capacity-model";
 import { classificationCounts, isPassengerTrain } from "./classification";
@@ -66,7 +66,7 @@ let notice = "",
   storageStatus = "",
   dirty = false;
 let saveTicket = 0;
-let result: AssignmentResult | undefined, worker: Worker | undefined;
+let result: DiagramAssignment | undefined, worker: Worker | undefined;
 let disposeDiagram: (() => void) | undefined;
 let demand: ReturnType<typeof estimateLineDemand> | undefined;
 let loading = false;
@@ -398,6 +398,7 @@ function calculate() {
     input,
     config,
     compare: false,
+    forDiagram: true,
   });
   render();
 }

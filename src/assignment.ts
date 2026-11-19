@@ -128,6 +128,7 @@ export function assignDemand(
   input: AssignmentDemand[],
   config: AssignmentConfig,
   onProgress?: (done: number, total: number, stage?: "od" | "events") => void,
+  profile = (query: RouteQuery) => cachedProfile(index, query),
 ): AssignmentResult {
   validateInputs(index, input, config);
   if (config.capacityConstrained) {
@@ -229,7 +230,7 @@ export function assignDemand(
       profileError = "";
     try {
       const searchStarted = performance.now();
-      journeys = cachedProfile(index, queryFor(first, config, config.start));
+      journeys = profile(queryFor(first, config, config.start));
       searchMs += performance.now() - searchStarted;
       result.diagnostics.profiles++;
       result.diagnostics.candidateJourneys =

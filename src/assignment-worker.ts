@@ -1,8 +1,13 @@
 /// <reference lib="webworker" />
 import { buildRoutingIndex } from "./routing";
 import { assignDemand } from "./assignment";
+import { lineAssignmentProfile } from "./line-assignment-profile";
 import type { DatasetSelection, TransferLink } from "./routing-model";
-import type { AssignmentDemand, AssignmentConfig } from "./assignment-model";
+import type {
+  AssignmentDemand,
+  AssignmentConfig,
+  DiagramAssignment,
+} from "./assignment-model";
 self.onmessage = (
   event: MessageEvent<{
     selections: DatasetSelection[];
@@ -10,6 +15,7 @@ self.onmessage = (
     input: AssignmentDemand[];
     config: AssignmentConfig;
     compare: boolean;
+    forDiagram?: boolean;
     compareCapacity?: boolean;
   }>,
 ) => {
@@ -28,19 +34,52 @@ self.onmessage = (
           { ...p.config, capacityConstrained: true },
         ]
       : modes.map((method) => ({ ...p.config, method }));
-    for (const config of configs)
+    for (const config of configs) {
+      const fast =
+        p.forDiagram &&
+        p.selections.length === 1 &&
+        !p.links.length &&
+        config.method === "fastest" &&
+        config.maxTransfers <= 1 &&
+        !config.capacityConstrained &&
+        !config.integer &&
+        !config.arrivalModel;
       results.push(
-        assignDemand(index, p.input, config, (done, total, stage) =>
-          self.postMessage({
-            type: "progress",
-            method: config.method,
-            done,
-            total,
-            stage,
-          }),
+        assignDemand(
+          index,
+          p.input,
+          config,
+          (done, total, stage) =>
+            self.postMessage({
+              type: "progress",
+              method: config.method,
+              done,
+              total,
+              stage,
+            }),
+          fast ? lineAssignmentProfile(index) : undefined,
         ),
       );
-    self.postMessage({ type: "result", results });
+    }
+    if (p.forDiagram) {
+      // The worker validates the full allocation. The diagram needs only its summaries.
+      const summaries = results.map(
+        ({
+          config,
+          loads,
+          capacity,
+          totals,
+          diagnostics,
+        }): DiagramAssignment => ({
+          config,
+          loads,
+          ...(capacity && { capacity }),
+          totals,
+          diagnostics,
+        }),
+      );
+      self.postMessage({ type: "result", results: summaries });
+    } else self.postMessage({ type: "result", results });
   } catch (error) {
     self.postMessage({ type: "error", message: (error as Error).message });
   }

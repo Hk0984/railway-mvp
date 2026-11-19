@@ -123,6 +123,10 @@ export interface AssignmentResult {
     timings?: Record<string, number>;
   };
 }
+export type DiagramAssignment = Pick<
+  AssignmentResult,
+  "config" | "loads" | "capacity" | "totals" | "diagnostics"
+>;
 export function defaultAssignmentConfig(): AssignmentConfig {
   return {
     method: "fastest",

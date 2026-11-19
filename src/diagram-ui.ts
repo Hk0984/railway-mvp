@@ -1,6 +1,7 @@
+import { diagramRoutes } from "./diagram-routes";
 import "./diagram.css";
 import { clock } from "./analysis";
-import type { AssignmentResult } from "./assignment-model";
+import type { DiagramAssignment } from "./assignment-model";
 import { capacitySpec } from "./capacity-model";
 import {
   crowdingColors,
@@ -23,6 +24,7 @@ import {
 import type { Project } from "./model";
 import { escapeHtml as e, numberText as n } from "./ui-utils";
 
+const routeSelection = new WeakMap<Project, number>();
 const storageKey = "railway-lab.diagram-haze";
 const bandLabels = [
   "比較的余裕あり",
@@ -83,42 +85,37 @@ export function mountDiagram(
   root: HTMLElement,
   project: Project,
   diaId: string,
-  result?: AssignmentResult,
+  result?: DiagramAssignment,
   compact = false,
 ) {
   const settings = readSettings();
   if (compact)
     Object.assign(settings, defaultSettings, { enabled: settings.enabled });
-  const stations = project.stations;
-  const stationNames = stations.map((s) => s.name);
-  const rows = new Map(
-    stations.map((s, i) => [s.id, plotTop + (i + 1) * rowHeight]),
-  );
-  const names = new Map(stations.map((s) => [s.id, s.name]));
+  const names = new Map(project.stations.map((s) => [s.id, s.name]));
   const types = new Map(project.types.map((t, i) => [t.id, i]));
   const trains = diagramTrains(project, diaId, result).filter(
     (t) => t.segments.length,
   );
   const byId = new Map(trains.map((t) => [t.train.id, t]));
-  const lines: PlotLine[] = [];
+  const routes = diagramRoutes(project, trains);
+  let routeIndex = Math.min(
+    routeSelection.get(project) ?? 0,
+    routes.length - 1,
+  );
+  let stationNames: string[] = [];
+  let visibleSegments = new Set<DiagramSegment>();
+  let query = indexPlot([]);
   let first = Infinity,
     last = 0;
   for (const service of trains)
     for (const segment of service.segments) {
       first = Math.min(first, segment.start);
       last = Math.max(last, segment.end);
-      lines.push({
-        segment,
-        y1: rows.get(segment.from.stationId)!,
-        y2: rows.get(segment.to.stationId)!,
-        type: types.get(service.train.typeId) ?? 0,
-      });
     }
   const start = Number.isFinite(first)
     ? Math.max(0, Math.floor(first / 3600) * 3600 - 900)
     : 0;
   const end = Math.max(start + 3600, Math.ceil(last / 3600) * 3600 + 900);
-  const query = indexPlot(lines);
   const percent = (v: number | null | undefined) =>
     v == null ? "未算出" : n(v) + "%";
   const people = (v: number | null | undefined) =>
@@ -138,10 +135,11 @@ export function mountDiagram(
       <label>ぼかし幅<input id="diagram-width" type="range" min="3" max="20" value="${settings.width}"></label>
       <label>表示対象<select id="diagram-scope"><option value="all">全列車</option><option value="selected" ${settings.selectedOnly ? "selected" : ""}>選択列車のみ</option></select></label>`
       }
+      ${routes.length > 1 ? `<label>表示経路<select id="diagram-route">${routes.map((r, i) => `<option value="${i}" ${i === routeIndex ? "selected" : ""}>${e(station(r[0]))} → ${e(station(r.at(-1)!))}</option>`).join("")}</select></label>` : ""}
       <label>時間軸<select id="diagram-zoom">${zoomLevels.map((z) => `<option value="${z}" ${z === 160 ? "selected" : ""}>${(z / 160) * 100}%</option>`).join("")}</select></label>
       ${compact ? "" : `<button data-page="9">${result ? "配分結果・条件を確認" : "旅客配分を計算"}</button>`}
     </div>
-    <p class="muted">${result ? `配分推計・${result.config.method === "logit" ? "ロジット" : "最短所要時間"}／定員制約${result.capacity ? "あり" : "なし"}・需要時間窓 ${clock(result.config.start)}–${clock(result.config.end)}` : "配分結果なし。駅利用者数・営業区分・輸送定員を設定して計算してください。"} 駅は登録順・等間隔。停車中・未算出区間はスジのみ表示。</p>
+    <p class="muted">${result ? `配分推計・${result.config.method === "logit" ? "ロジット" : "最短所要時間"}／定員制約${result.capacity ? "あり" : "なし"}・需要時間窓 ${clock(result.config.start)}–${clock(result.config.end)}` : "配分結果なし。駅利用者数・営業区分・輸送定員を設定して計算してください。"} 駅は${routes.length > 1 ? "選択した経路順" : "登録順"}・等間隔。時刻欠落の区間は破線で表示。</p>
     <div class="diagram-legend" aria-label="混雑率の凡例"></div>
     ${
       compact
@@ -157,7 +155,7 @@ export function mountDiagram(
     </div>
     ${trains.length ? "" : '<p class="muted">表示できる列車時刻がありません。</p>'}
     <div class="diagram-controls">
-      <label>列車<select id="diagram-train"><option value="">選択してください</option>${trains.map(({ train }) => `<option value="${e(train.id)}">${e(train.number || train.id)} ／ ${e(project.types[types.get(train.typeId) ?? -1]?.name ?? train.typeId)} ／ ${train.direction === "up" ? "上り" : "下り"}</option>`).join("")}</select></label>
+      <label>列車<select id="diagram-train"><option value="">選択してください</option></select></label>
       <label>区間<select id="diagram-section" disabled><option value="">選択してください</option></select></label>
     </div>
     <div class="diagram-details">
@@ -169,14 +167,9 @@ export function mountDiagram(
     root.querySelector<T>(selector)!;
   const scroll = find<HTMLDivElement>(".diagram-scroll");
   const spacer = find<HTMLDivElement>(".diagram-size");
-  if (compact)
-    scroll.style.setProperty(
-      "--plot-content-height",
-      `${plotTop + (stations.length + 1) * rowHeight + 20}px`,
-    );
   const canvas = find<HTMLCanvasElement>("canvas");
   const ctx = canvas.getContext("2d")!;
-  const haze = document.createElement("canvas").getContext("2d")!;
+  let haze = document.createElement("canvas").getContext("2d")!;
   const trainSelect = find<HTMLSelectElement>("#diagram-train");
   const segmentSelect = find<HTMLSelectElement>("#diagram-section");
   let zoom = 160,
@@ -185,10 +178,63 @@ export function mountDiagram(
     visible: VisibleLine[] = [];
   let frame = 0;
 
+  function showRoute() {
+    const ids = routes[routeIndex];
+    stationNames = ids.map(station);
+    const rows = new Map(
+      ids.map((id, i) => [id, plotTop + (i + 1) * rowHeight]),
+    );
+    const lines: PlotLine[] = [];
+    const shown = [];
+    for (const service of trains) {
+      let hasLine = false;
+      for (const segment of service.segments) {
+        const y1 = rows.get(segment.from.stationId);
+        const y2 = rows.get(segment.to.stationId);
+        if (y1 === undefined || y2 === undefined) continue;
+        hasLine = true;
+        lines.push({
+          segment,
+          y1,
+          y2,
+          type: types.get(service.train.typeId) ?? 0,
+        });
+      }
+      if (hasLine) shown.push(service.train);
+    }
+    visibleSegments = new Set(lines.map((line) => line.segment));
+    query = indexPlot(lines);
+    // The view coordinates may match another route, but its haze cannot be reused.
+    haze = document.createElement("canvas").getContext("2d")!;
+    trainSelect.innerHTML =
+      '<option value="">選択してください</option>' +
+      shown
+        .map(
+          (train) =>
+            `<option value="${e(train.id)}">${e(train.number || train.id)} ／ ${e(project.types[types.get(train.typeId) ?? -1]?.name ?? train.typeId)} ／ ${train.direction === "up" ? "上り" : "下り"}</option>`,
+        )
+        .join("");
+    const id = Array.from(trainSelect.options).some(
+      (option) => option.value === selected,
+    )
+      ? selected
+      : "";
+    selected = "";
+    segmentSelect.disabled = true;
+    selectTrain(id, active && visibleSegments.has(active) ? active : undefined);
+    resizePlot();
+  }
+
   function resizePlot() {
     spacer.style.width =
       Math.ceil(plotLeft + ((end - start) / 3600) * zoom) + "px";
-    spacer.style.height = plotTop + (stations.length + 1) * rowHeight + "px";
+    const contentHeight = plotTop + (stationNames.length + 1) * rowHeight;
+    spacer.style.height = contentHeight + "px";
+    if (compact)
+      scroll.style.setProperty(
+        "--plot-content-height",
+        contentHeight + 20 + "px",
+      );
     redraw();
   }
   function redraw() {
@@ -339,9 +385,10 @@ export function mountDiagram(
       segmentSelect.innerHTML =
         '<option value="">選択してください</option>' +
         (train?.segments
-          .map(
-            (s, i) =>
-              `<option value="${i}">${e(route(s))} ／ ${clock(s.start)}${s.kind === "dwell" ? " 停車" : ""}</option>`,
+          .map((s, i) =>
+            visibleSegments.has(s)
+              ? `<option value="${i}">${e(route(s))} ／ ${clock(s.start)}${s.kind === "dwell" ? " 停車" : ""}</option>`
+              : "",
           )
           .join("") ?? "");
       showTrain(train);
@@ -388,6 +435,11 @@ export function mountDiagram(
           ? undefined
           : byId.get(selected)?.segments[Number(target.value)];
       selectTrain(selected, segment);
+    } else if (target.id === "diagram-route") {
+      routeIndex = Number(target.value);
+      routeSelection.set(project, routeIndex);
+      scroll.scrollTop = 0;
+      showRoute();
     } else if (target.id === "diagram-zoom") {
       const prior = zoom;
       const left = scroll.scrollLeft;
@@ -443,7 +495,7 @@ export function mountDiagram(
     )
       updateSettings();
   });
-  resizePlot();
+  showRoute();
   return () => {
     observer.disconnect();
     cancelAnimationFrame(frame);
