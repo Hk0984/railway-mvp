@@ -139,7 +139,7 @@ export function mountDiagram(
       <label>時間軸<select id="diagram-zoom">${zoomLevels.map((z) => `<option value="${z}" ${z === 160 ? "selected" : ""}>${(z / 160) * 100}%</option>`).join("")}</select></label>
       ${compact ? "" : `<button data-page="9">${result ? "配分結果・条件を確認" : "旅客配分を計算"}</button>`}
     </div>
-    <p class="muted">${result ? `配分推計・${result.config.method === "logit" ? "ロジット" : "最短所要時間"}／定員制約${result.capacity ? "あり" : "なし"}・需要時間窓 ${clock(result.config.start)}–${clock(result.config.end)}` : "配分結果なし。駅利用者数・営業区分・輸送定員を設定して計算してください。"} 駅は${routes.length > 1 ? "選択した経路順" : "登録順"}・等間隔。時刻欠落の区間は破線で表示。</p>
+    <p class="muted">${result ? `配分推計・${result.config.method === "logit" ? "ロジット" : "最短所要時間"}／定員制約${result.capacity ? "あり" : "なし"}・需要時間窓 ${clock(result.config.start)}–${clock(result.config.end)}` : "配分結果なし。駅利用者数・営業区分・輸送定員を設定して計算してください。"} 駅は${routes.length > 1 ? "選択した経路順" : "登録順"}・等間隔。通過時刻を省略した駅は前後の記録時刻を結びます。停車駅の時刻が欠ける区間は破線で表示。</p>
     <div class="diagram-legend" aria-label="混雑率の凡例"></div>
     ${
       compact
@@ -191,7 +191,12 @@ export function mountDiagram(
       for (const segment of service.segments) {
         const y1 = rows.get(segment.from.stationId);
         const y2 = rows.get(segment.to.stationId);
-        if (y1 === undefined || y2 === undefined) continue;
+        if (
+          y1 === undefined ||
+          y2 === undefined ||
+          segment.untimedPasses?.some((stop) => !rows.has(stop.stationId))
+        )
+          continue;
         hasLine = true;
         lines.push({
           segment,
@@ -307,8 +312,11 @@ export function mountDiagram(
       (best, s) => (!best || s.percent! > best.percent! ? s : best),
       undefined,
     );
+    const sectionCount = (s: DiagramSegment) =>
+      (s.untimedPasses?.length ?? 0) + 1;
     const avg = known.length
-      ? known.reduce((sum, s) => sum + s.percent!, 0) / known.length
+      ? known.reduce((sum, s) => sum + s.percent! * sectionCount(s), 0) /
+        known.reduce((sum, s) => sum + sectionCount(s), 0)
       : null;
     const type =
       project.types[types.get(train.typeId) ?? -1]?.name ?? train.typeId;
@@ -360,7 +368,9 @@ export function mountDiagram(
         : null;
     const status =
       segment.kind === "dwell"
-        ? "停車中（駅間の混雑率は適用しません）"
+        ? segment.from.status === "pass"
+          ? "運転停車（旅客の乗降なし）"
+          : "停車中（駅間の混雑率は適用しません）"
         : segment.kind === "gap"
           ? "途中の時刻欠落により未算出"
           : segment.kind === "point"
@@ -374,7 +384,8 @@ export function mountDiagram(
                   : "旅客配分による推計値";
     detail.innerHTML = `<h3>区間情報</h3><p><strong>${e(train.number || train.id)}</strong> ／ ${e(route(segment))} ／ ${clock(segment.start)}–${clock(segment.end)}</p>
       <p>推定乗車人数 ${people(segment.passengers)} ／ 輸送力 ${people(capacity)}${capacity !== null && spec?.kind === "transport" ? "（" + e(spec.basis) + "）" : ""}</p>
-      <p>混雑率 ${percent(segment.percent)} ／ ${status}</p>`;
+      <p>混雑率 ${percent(segment.percent)} ／ ${status}</p>
+      ${segment.untimedPasses ? `<p class="muted">時刻の記載がない通過駅　${segment.untimedPasses.map((s) => e(station(s.stationId))).join("、")}</p>` : ""}`;
   }
 
   function selectTrain(id: string, segment?: DiagramSegment) {

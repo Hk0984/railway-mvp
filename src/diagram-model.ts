@@ -34,9 +34,38 @@ export interface DiagramSegment {
   start: number;
   end: number;
   kind: "run" | "dwell" | "gap" | "point";
+  untimedPasses?: Stop[];
   outsideWindow: boolean;
   passengers: number | null;
   percent: number | null;
+}
+
+function matchingRun(
+  load: TrainLoad,
+  visits: Stop[],
+  from: number,
+  to: number,
+) {
+  for (let i = from; i <= to; i++) {
+    const recorded = load.stops[i],
+      visit = visits[i];
+    if (
+      !recorded ||
+      recorded.stationId !== visit.stationId ||
+      recorded.positionId !== visit.positionId ||
+      recorded.status !== visit.status ||
+      recorded.arrival !== visit.arrival ||
+      recorded.departure !== visit.departure
+    )
+      return false;
+    if (
+      i > from &&
+      i < to &&
+      (load.boardings[i] !== 0 || load.alightings[i] !== 0)
+    )
+      return false;
+  }
+  return true;
 }
 
 export function diagramTrains(
@@ -59,63 +88,76 @@ export function diagramTrains(
       const load = loads.get(train.id);
       const service: DiagramTrain = { train, visits, load, segments: [] };
       function add(
-        from: Stop,
-        to: Stop,
+        fromIndex: number,
+        toIndex: number,
         start: number,
         end: number,
         kind: DiagramSegment["kind"],
-        index?: number,
+        untimedPasses?: Stop[],
       ) {
         const outsideWindow =
           kind === "run" &&
           result !== undefined &&
           (start < result.config.start ||
             start > horizon ||
-            (index !== undefined && load?.segmentObserved?.[index] === false));
+            load?.segmentObserved?.[fromIndex] === false ||
+            (untimedPasses !== undefined &&
+              result.capacity !== undefined &&
+              end > horizon));
+        // An untimed pass has no boarding or alighting. The first leg's load
+        // remains valid until the next recorded time without estimating pass times.
         const matched =
+          kind === "run" &&
           !outsideWindow &&
-          index !== undefined &&
           load &&
-          load.stops[index]?.stationId === from.stationId &&
-          load.stops[index]?.positionId === from.positionId &&
-          load.stops[index]?.departure === from.departure &&
-          load.stops[index + 1]?.stationId === to.stationId &&
-          load.stops[index + 1]?.positionId === to.positionId &&
-          load.stops[index + 1]?.arrival === to.arrival;
-        const ratio = matched ? (load.occupancies[index] ?? null) : null;
+          matchingRun(load, visits, fromIndex, toIndex);
+        const ratio = matched ? (load.occupancies[fromIndex] ?? null) : null;
         service.segments.push({
           service,
-          from,
-          to,
+          from: visits[fromIndex],
+          to: visits[toIndex],
           start,
           end,
           kind,
+          ...(untimedPasses && { untimedPasses }),
           outsideWindow,
-          passengers: matched ? (load.segmentLoads[index] ?? null) : null,
+          passengers: matched ? (load.segmentLoads[fromIndex] ?? null) : null,
           percent: ratio === null ? null : ratio * 100,
         });
       }
-      let previous: { stop: Stop; end: number; index: number } | undefined;
+      let previous: { end: number; index: number } | undefined;
       visits.forEach((stop, index) => {
         const arrival = stop.arrival ?? stop.departure;
         const departure = stop.departure ?? stop.arrival;
         if (arrival === undefined || departure === undefined) return;
         if (previous) {
-          const adjacent = previous.index === index - 1;
+          const skipped =
+            index > previous.index + 1
+              ? visits.slice(previous.index + 1, index)
+              : undefined;
+          const passOnly =
+            skipped?.every((s) => s.status === "pass") &&
+            visits[previous.index].stationId !== stop.stationId;
           add(
-            previous.stop,
-            stop,
+            previous.index,
+            index,
             previous.end,
             arrival,
-            adjacent ? "run" : "gap",
-            adjacent ? previous.index : undefined,
+            !skipped || passOnly ? "run" : "gap",
+            passOnly ? skipped : undefined,
           );
         }
-        if (arrival < departure) add(stop, stop, arrival, departure, "dwell");
-        previous = { stop, end: departure, index };
+        if (arrival < departure) add(index, index, arrival, departure, "dwell");
+        previous = { end: departure, index };
       });
       if (!service.segments.length && previous)
-        add(previous.stop, previous.stop, previous.end, previous.end, "point");
+        add(
+          previous.index,
+          previous.index,
+          previous.end,
+          previous.end,
+          "point",
+        );
       return service;
     });
 }

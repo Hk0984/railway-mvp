@@ -121,7 +121,101 @@ describe("列車ダイヤ図", () => {
 
     delete train.stops[3].departure;
     expect(diagramTrains(p, diaId, result)[0].segments.at(-1)).toMatchObject({
+      kind: "run",
+      percent: null,
+    });
+  });
+
+  it("carries measured loads across untimed passes without treating a missing stop time as a pass", () => {
+    const p = sampleProject();
+    const dia = p.timetables[0];
+    const train = dia.trains[0];
+    train.capacity = 160;
+    train.stops = [
+      { stationId: "s0", status: "stop", departure: 120 },
+      { stationId: "s1", status: "pass" },
+      { stationId: "s2", status: "pass" },
+      { stationId: "s3", status: "pass", departure: 290 },
+      { stationId: "s4", status: "stop", arrival: 420 },
+    ];
+    dia.trains = [train];
+    const datasetId = p.datasetId!;
+    const index = buildRoutingIndex([
+      { datasetId, project: p, timetableId: dia.id },
+    ]);
+    const config = { ...defaultAssignmentConfig(), start: 0, end: 90 };
+    const rows = [
+      {
+        datasetId,
+        origin: "s0",
+        destination: "s4",
+        passengers: 120,
+        purpose: "commute",
+        kind: "outbound",
+        source: "manual",
+        start: 0,
+        end: 90,
+      },
+      {
+        datasetId,
+        origin: "s3",
+        destination: "s4",
+        passengers: 10,
+        purpose: "commute",
+        kind: "outbound",
+        source: "manual",
+        start: 0,
+        end: 90,
+      },
+    ] as const;
+    for (const capacityConstrained of [false, true]) {
+      const result = assignDemand(index, [...rows], {
+        ...config,
+        capacityConstrained,
+      });
+      expect(result.totals.assigned).toBe(120);
+      expect(result.totals.unassigned).toBe(10);
+      const [stretch, afterTimedPass] = diagramTrains(p, dia.id, result)[0]
+        .segments;
+      expect(stretch).toMatchObject({
+        from: { stationId: "s0" },
+        to: { stationId: "s3" },
+        start: 120,
+        end: 290,
+        kind: "run",
+        passengers: 120,
+        percent: 75,
+      });
+      expect(
+        stretch.untimedPasses?.map((s) => [
+          s.stationId,
+          s.arrival,
+          s.departure,
+        ]),
+      ).toEqual([
+        ["s1", undefined, undefined],
+        ["s2", undefined, undefined],
+      ]);
+      expect(afterTimedPass).toMatchObject({
+        from: { stationId: "s3" },
+        to: { stationId: "s4" },
+        start: 290,
+        end: 420,
+        kind: "run",
+        passengers: 120,
+        percent: 75,
+      });
+      expect(afterTimedPass.untimedPasses).toBeUndefined();
+    }
+
+    train.stops[2].status = "stop";
+    const revised = buildRoutingIndex([
+      { datasetId, project: p, timetableId: dia.id },
+    ]);
+    const result = assignDemand(revised, [...rows], config);
+    expect(diagramTrains(p, dia.id, result)[0].segments[0]).toMatchObject({
       kind: "gap",
+      passengers: null,
       percent: null,
     });
   });
