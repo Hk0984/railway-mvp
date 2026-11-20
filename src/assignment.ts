@@ -19,6 +19,7 @@ import {
   type AssignmentDemand,
   type AssignmentResult,
   type ArrivalCohort,
+  type PassengerAllocation,
   type TrainLoad,
 } from "./assignment-model";
 const sum = (values: number[]) => values.reduce((a, b) => a + b, 0);
@@ -70,6 +71,12 @@ export function queryFor(
   return {
     origin: { datasetId: row.datasetId, stationId: row.origin },
     destination: demandDestination(row),
+    ...(row.boundaryOriginTrains && {
+      boundaryOriginTrains: row.boundaryOriginTrains,
+    }),
+    ...(row.boundaryDestinationTrains && {
+      boundaryDestinationTrains: row.boundaryDestinationTrains,
+    }),
     mode: "depart",
     time: time + (config.boardingCutoffSeconds ?? 0),
     sort: "arrival",
@@ -122,10 +129,17 @@ export function assignDemand(
   input: AssignmentDemand[],
   config: AssignmentConfig,
   onProgress?: (done: number, total: number, stage?: "od" | "events") => void,
+  profile = (query: RouteQuery) => cachedProfile(index, query),
+  selectCandidates?: (feasible: Journey[]) => Journey[],
 ): AssignmentResult {
   validateInputs(index, input, config);
-  if (config.capacityConstrained)
+  if (config.capacityConstrained) {
+    if (
+      input.some((r) => r.boundaryOriginTrains || r.boundaryDestinationTrains)
+    )
+      throw new Error("路線外直通需要は定員制約なしの配分に対応しています");
     return assignCapacity(index, input, config, onProgress);
+  }
   const started = performance.now();
   const result: AssignmentResult = {
     calculationVersion: "0.6",
@@ -198,6 +212,8 @@ export function assignDemand(
           r.destinationDatasetId ?? r.datasetId,
           r.destination,
           r.accessSeconds ?? 0,
+          r.boundaryOriginTrains,
+          r.boundaryDestinationTrains,
         ]),
         list = groups.get(key) ?? [];
       list.push(i);
@@ -216,7 +232,7 @@ export function assignDemand(
       profileError = "";
     try {
       const searchStarted = performance.now();
-      journeys = cachedProfile(index, queryFor(first, config, config.start));
+      journeys = profile(queryFor(first, config, config.start));
       searchMs += performance.now() - searchStarted;
       result.diagnostics.profiles++;
       result.diagnostics.candidateJourneys =
@@ -285,7 +301,7 @@ export function assignDemand(
         const rankingKey = JSON.stringify([row.purpose, arrival]);
         const ranked =
           rankingCache.get(rankingKey) ??
-          feasible
+          (selectCandidates ? selectCandidates(feasible) : feasible)
             .map((j) => ({ j, cost: generalizedCost(j, arrival, coeff) }))
             .sort((x, y) =>
               config.method === "fastest"
@@ -362,7 +378,13 @@ export function assignDemand(
 }
 export function aggregateTrainLoads(
   index: RoutingIndex,
-  result: Pick<AssignmentResult, "journeys" | "allocations">,
+  result: {
+    journeys: Record<string, Pick<Journey, "legs">>;
+    allocations: readonly Pick<
+      PassengerAllocation,
+      "journeyId" | "passengers"
+    >[];
+  },
 ): TrainLoad[] {
   const loads = new Map<string, TrainLoad>();
   for (const [key, trip] of index.trips) {
@@ -460,6 +482,8 @@ export function validateAssignment(
   const balanced = new Map<string, number>(),
     rowTotals = Array(result.input.length).fill(0);
   const checkedJourneys = new Map<string, boolean>();
+  const boundaryBoarded = new Map<string, number>();
+  const boundaryAlighted = new Map<string, number>();
   for (const c of result.cohorts) {
     const r = result.input[c.demandIndex];
     if (
@@ -499,6 +523,8 @@ export function validateAssignment(
       r.datasetId,
       r.origin,
       r.destination,
+      r.boundaryOriginTrains,
+      r.boundaryDestinationTrains,
     ]);
     let invalid = checkedJourneys.get(validationKey);
     if (invalid === undefined) {
@@ -511,6 +537,18 @@ export function validateAssignment(
       j.arrival - c.arrival > result.config.maxJourneySeconds
     )
       errors.push("成立しない旅程への配分");
+    if (!invalid) {
+      const addBoundary = (
+        map: Map<string, number>,
+        leg: Journey["legs"][number],
+      ) => {
+        const key = keyOf(leg.datasetId, leg.timetableId, leg.trainId);
+        map.set(key, (map.get(key) ?? 0) + a.passengers);
+      };
+      if (r.boundaryOriginTrains) addBoundary(boundaryBoarded, j.legs[0]);
+      if (r.boundaryDestinationTrains)
+        addBoundary(boundaryAlighted, j.legs.at(-1)!);
+    }
     for (const leg of j.legs) {
       const trip = index.trips.get(
           keyOf(leg.datasetId, leg.timetableId, leg.trainId),
@@ -567,11 +605,17 @@ export function validateAssignment(
         ((s.status !== "stop" ||
           s.pickupAllowed === false ||
           s.departure === undefined) &&
-          load.boardings[i] > 1e-7) ||
+          load.boardings[i] -
+            (i === 0 ? (boundaryBoarded.get(load.key) ?? 0) : 0) >
+            1e-7) ||
         ((s.status !== "stop" ||
           s.dropoffAllowed === false ||
           s.arrival === undefined) &&
-          load.alightings[i] > 1e-7)
+          load.alightings[i] -
+            (i === load.stops.length - 1
+              ? (boundaryAlighted.get(load.key) ?? 0)
+              : 0) >
+            1e-7)
       )
         errors.push("乗降不可駅で乗降");
     }

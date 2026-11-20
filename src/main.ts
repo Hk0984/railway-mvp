@@ -1,3 +1,4 @@
+import { diagramPage, mountDiagram } from "./diagram-ui";
 import "./style.css";
 import "./journey.css";
 import "./assignment.css";
@@ -41,6 +42,7 @@ import {
 } from "./classification-ui";
 import {
   renderAssignment,
+  currentAssignmentResult,
   assignmentClick,
   assignmentChange,
 } from "./assignment-ui";
@@ -97,8 +99,9 @@ const names = [
   "旅客配分・混雑分析",
   "需要校正・シナリオ・比較",
   "統合配分・旅客流動",
+  "列車ダイヤ図",
 ];
-const icons = ["▦", "⇅", "⌁", "◎", "↗", "▤", "⇢", "◷", "◇", "▥", "◈", "⇄"];
+const icons = ["▦", "⇅", "⌁", "◎", "↗", "▤", "⇢", "◷", "◇", "▥", "◈", "⇄", "⌗"];
 function uiContext(): UIContext {
   return {
     project: p,
@@ -607,8 +610,14 @@ function matrix() {
     )
   );
 }
+let unmountDiagram: (() => void) | undefined;
 function render() {
-  app.innerHTML = `<aside><a class="brand" href="#"><span class="logo">R<span>↗</span></span><span>Railway Lab<small>ダイヤ・OD需要分析</small></span></a><div class="workspace-label">WORKSPACE</div><nav aria-label="メインメニュー">${names.map((n, i) => `<button data-page="${i}" class="${page === i ? "active" : ""}"><span>${icons[i]}</span>${n}</button>`).join("")}</nav><div class="sidebar-bottom"><span class="status-dot"></span> ブラウザ内で処理<small>MVP 0.65 / ローカル保存</small></div></aside><main><header><div><div class="breadcrumb">ワークスペース <span>/ ${names[page]}</span></div><h1>${names[page]}</h1></div><div class="project-select"><span class="tag green">ローカル</span>${select("diaId", esc(p.name), options(p.timetables, diaId))}</div></header>${message ? `<div class="notice" role="status">${esc(message)} ${button("dismiss", "閉じる")}</div>` : ""}${warnings.length ? `<details class="notice"><summary>読み込みの警告・制限 ${warnings.length}件（部分対応）</summary><ul>${warnings.map((w) => `<li>${esc(w)}</li>`).join("")}</ul></details>` : ""}${[dashboard, management, analysis, city, estimation, matrix, () => renderRouting(uiContext()), () => renderTemporal(uiContext()), () => renderClassification(uiContext()), () => renderAssignment(uiContext()), () => renderAnalytics(uiContext()), () => renderNetwork(uiContext())][page]()}<footer>Railway Lab · ブラウザ内の分析プロトタイプ <span>単位：時刻＝運行日基準 / 所要時間＝分 / 需要＝人</span></footer></main>`;
+  unmountDiagram?.();
+  unmountDiagram = undefined;
+  app.innerHTML = `<aside><a class="brand" href="#"><span class="logo">R<span>↗</span></span><span>Railway Lab<small>ダイヤ・OD需要分析</small></span></a><div class="workspace-label">WORKSPACE</div><nav aria-label="メインメニュー">${names.map((n, i) => `<button data-page="${i}" class="${page === i ? "active" : ""}"><span>${icons[i]}</span>${n}</button>`).join("")}</nav><div class="sidebar-bottom"><span class="status-dot"></span> ブラウザ内で処理<small>MVP 0.65 / ローカル保存</small></div></aside><main><header><div><div class="breadcrumb">ワークスペース <span>/ ${names[page]}</span></div><h1>${names[page]}</h1></div><div class="project-select"><span class="tag green">ローカル</span>${select("diaId", esc(p.name), options(p.timetables, diaId))}</div></header>${message ? `<div class="notice" role="status">${esc(message)} ${button("dismiss", "閉じる")}</div>` : ""}${warnings.length ? `<details class="notice"><summary>読み込みの警告・制限 ${warnings.length}件（部分対応）</summary><ul>${warnings.map((w) => `<li>${esc(w)}</li>`).join("")}</ul></details>` : ""}${[dashboard, management, analysis, city, estimation, matrix, () => renderRouting(uiContext()), () => renderTemporal(uiContext()), () => renderClassification(uiContext()), () => renderAssignment(uiContext()), () => renderAnalytics(uiContext()), () => renderNetwork(uiContext()), diagramPage][page]()}<footer>Railway Lab · ブラウザ内の分析プロトタイプ <span>単位：時刻＝運行日基準 / 所要時間＝分 / 需要＝人</span></footer></main>`;
+  const diagram = app.querySelector<HTMLElement>("#train-diagram");
+  if (diagram)
+    unmountDiagram = mountDiagram(diagram, p, diaId, currentAssignmentResult(uiContext()));
   refreshStorageNotice();
   if (page === 11) restoreNetworkForm();
   if (page === 10) restoreAnalyticsForm();
@@ -715,6 +724,7 @@ app.addEventListener("click", (event) => {
 });
 app.addEventListener("change", async (event) => {
   const el = event.target as HTMLInputElement;
+  if (el.closest("#train-diagram")) return;
   if (analysisServiceChange(el, render)) return;
   if (el.closest("#network-page")) {
     void networkChange(el, uiContext());

@@ -27,6 +27,9 @@ export interface DatasetSelection {
 export interface RouteQuery {
   /** Internal candidate storage. Expand selected journeys before display or validation. */
   compactProfile?: boolean;
+  /** Train IDs that cross the line boundary on the first or last leg. */
+  boundaryOriginTrains?: string[];
+  boundaryDestinationTrains?: string[];
   origin: StationRef;
   destination: StationRef;
   mode: "depart" | "arrive";

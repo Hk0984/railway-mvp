@@ -1,4 +1,4 @@
-import type { Purpose, Stop } from "./model";
+import type { Direction, Purpose, Stop } from "./model";
 import type { TimedOD } from "./temporal-model";
 import type { Journey } from "./routing-model";
 import type { CapacityOutcome } from "./capacity-assignment";
@@ -41,6 +41,10 @@ export interface AssignmentDemand extends TimedOD {
   datasetId: string;
   destinationDatasetId?: string;
   accessSeconds?: number;
+  boundaryOriginTrains?: string[];
+  boundaryDestinationTrains?: string[];
+  /** When present, start/end constrain arrival at the destination. */
+  arrivalDirection?: Direction;
 }
 export interface ArrivalCohort {
   id: string;
@@ -118,9 +122,29 @@ export interface AssignmentResult {
     milliseconds: number;
     warnings: string[];
     candidateJourneys?: number;
+    hourlyArrivals?: Record<Direction, number[]>;
+    boardingLimit?: {
+      percent: number;
+      horizon: number;
+      denied: number;
+      waiting: number;
+      afterServiceDay: number;
+    };
+
     timings?: Record<string, number>;
   };
 }
+export interface DiagramTransfer {
+  fromConnection: number;
+  toConnection: number;
+}
+
+export type DiagramTransfers = Record<string, Record<number, DiagramTransfer>>;
+
+export type DiagramAssignment = Pick<
+  AssignmentResult,
+  "config" | "loads" | "capacity" | "totals" | "diagnostics"
+> & { transfers?: DiagramTransfers };
 export function defaultAssignmentConfig(): AssignmentConfig {
   return {
     method: "fastest",
