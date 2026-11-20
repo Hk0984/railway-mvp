@@ -58,6 +58,7 @@
   margin-top: 1rem;
 }
 .diagram-details section {
+  min-width: 0;
   padding: 0.75rem;
   background: #f5f8f7;
   border-radius: 6px;
@@ -66,8 +67,67 @@
 .diagram-details p {
   margin: 0.25rem 0;
 }
-.diagram-details svg {
+.diagram-train-chart {
+  margin-top: 0.65rem;
+  overflow-x: auto;
+}
+.diagram-train-chart svg {
   display: block;
-  width: 100%;
-  max-width: 480px;
+  max-width: none;
+  fill: currentColor;
+  font-size: 12px;
+}
+.diagram-chart-heading {
+  font-weight: 650;
+}
+.diagram-chart-axis {
+  fill: none;
+  stroke: #a8bcb4;
+}
+.diagram-chart-line {
+  fill: none;
+  stroke: #315c60;
+}
+.diagram-chart-point {
+  fill: #315c60;
+}
+.diagram-chart-peak {
+  fill: #a63552;
+}
+.diagram-chart-station.vertical {
+  writing-mode: vertical-rl;
+}
+.diagram-transfer-from {
+  fill: #2b6eae;
+  background-color: #2b6eae;
+}
+.diagram-transfer-to {
+  fill: #a64f16;
+  background-color: #a64f16;
+}
+.diagram-transfer-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem 0.85rem;
+  font-size: 0.85rem;
+}
+.diagram-transfer-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+.diagram-transfer-legend i {
+  width: 0.65rem;
+  height: 0.65rem;
+}
+.diagram-transfer-values {
+  margin-top: 0.55rem;
+  font-size: 0.85rem;
+}
+.diagram-transfer-values table {
+  margin-top: 0.35rem;
+}
+.diagram-transfer-values td {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
 }

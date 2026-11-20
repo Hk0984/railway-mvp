@@ -63,6 +63,11 @@ try {
   await page.getByRole("button", { name: "混雑を計算" }).click();
   await page.getByText("計算完了", { exact: true }).waitFor();
   await page.locator("#diagram-train").selectOption("down-8");
+  const trainChart = page.locator("#diagram-train-detail .diagram-train-chart");
+  assert.deepEqual(
+    await trainChart.locator(".diagram-chart-station").allTextContents(),
+    ["緑丘ニュータウン", "東雲学園"],
+  );
   await page.locator("#diagram-section").selectOption("0");
   assert.match(
     await page.locator("#diagram-segment-detail").innerText(),

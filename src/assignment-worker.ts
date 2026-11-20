@@ -4,6 +4,7 @@ import { assignDiagramCapacity } from "./diagram-capacity";
 import { assignDemand } from "./assignment";
 import { assignDestinationArrivals } from "./destination-assignment";
 import { lineAssignmentProfile } from "./line-assignment-profile";
+import { assignmentTransfers } from "./diagram-transfers";
 import type { Direction } from "./model";
 import type { DatasetSelection, TransferLink } from "./routing-model";
 import type {
@@ -92,21 +93,17 @@ self.onmessage = (
     }
     if (p.forDiagram) {
       // The worker validates the full allocation. The diagram needs only its summaries.
-      const summaries = results.map(
-        ({
-          config,
-          loads,
-          capacity,
-          totals,
-          diagnostics,
-        }): DiagramAssignment => ({
+      const summaries = results.map((result): DiagramAssignment => {
+        const { config, loads, capacity, totals, diagnostics } = result;
+        return {
           config,
           loads,
           ...(capacity && { capacity }),
           totals,
           diagnostics,
-        }),
-      );
+          transfers: assignmentTransfers(result),
+        };
+      });
       self.postMessage({ type: "result", results: summaries });
     } else self.postMessage({ type: "result", results });
   } catch (error) {

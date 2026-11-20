@@ -134,10 +134,17 @@ export interface AssignmentResult {
     timings?: Record<string, number>;
   };
 }
+export interface DiagramTransfer {
+  fromConnection: number;
+  toConnection: number;
+}
+
+export type DiagramTransfers = Record<string, Record<number, DiagramTransfer>>;
+
 export type DiagramAssignment = Pick<
   AssignmentResult,
   "config" | "loads" | "capacity" | "totals" | "diagnostics"
->;
+> & { transfers?: DiagramTransfers };
 export function defaultAssignmentConfig(): AssignmentConfig {
   return {
     method: "fastest",

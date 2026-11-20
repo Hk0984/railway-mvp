@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
+import { assignDemand } from "../src/assignment";
 import {
   defaultAssignmentConfig,
   type AssignmentDemand,
 } from "../src/assignment-model";
 import { assignDiagramCapacity } from "../src/diagram-capacity";
+import { assignmentTransfers } from "../src/diagram-transfers";
 import { serviceDay } from "../src/line-demand";
 import type { Train } from "../src/model";
 import { buildRoutingIndex } from "../src/routing";
@@ -125,6 +127,47 @@ describe("乗車上限", () => {
       waiting: 40,
     });
     expect(result.totals).toMatchObject({ assigned: 160, unassigned: 40 });
+  });
+
+  it("counts transfers on the trains passengers boarded after waiting", () => {
+    const { dia, config, train, demand, index } = setup();
+    dia.trains = [
+      {
+        ...train("接続元", [
+          { stationId: "s0", status: "stop", departure: at(8, 10) },
+          { stationId: "s2", status: "stop", arrival: at(8, 20) },
+        ]),
+        capacity: 200,
+      },
+      ...[25, 35].map((minute) => ({
+        ...train(String(minute), [
+          { stationId: "s2", status: "stop", departure: at(8, minute) },
+          { stationId: "s4", status: "stop", arrival: at(8, minute + 12) },
+        ]),
+        capacity: minute === 25 ? 60 : 50,
+      })),
+    ];
+    const rows = [
+      demand("s0", "s4", at(8), at(8, 5), 155),
+      demand("s2", "s4", at(8), at(8, 5), 10),
+    ];
+    const options = { ...config, maxTransfers: 1 };
+    const routing = index();
+    const unlimited = assignDemand(routing, rows, options);
+    const [incoming, first, later] = unlimited.loads;
+    expect(assignmentTransfers(unlimited)).toEqual({
+      [incoming.key]: { 1: { fromConnection: 0, toConnection: 155 } },
+      [first.key]: { 0: { fromConnection: 155, toConnection: 0 } },
+    });
+
+    const limited = assignDiagramCapacity(routing, rows, options, 100);
+    expect(limited.diagnostics.boardingLimit?.waiting).toBe(55);
+    expect(limited.loads.map((l) => l.totalBoardings)).toEqual([155, 60, 50]);
+    expect(limited.transfers).toEqual({
+      [incoming.key]: { 1: { fromConnection: 0, toConnection: 100 } },
+      [first.key]: { 0: { fromConnection: 50, toConnection: 0 } },
+      [later.key]: { 0: { fromConnection: 50, toConnection: 0 } },
+    });
   });
 
   it("uses the recorded boundary time on an explicitly selected through service", () => {

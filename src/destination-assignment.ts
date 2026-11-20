@@ -5,6 +5,7 @@ import type {
   DiagramAssignment,
 } from "./assignment-model";
 import { demandMass, hourlyDemandCurve } from "./hourly-demand-curve";
+import { summarizeDiagramTransfers } from "./diagram-transfers";
 import { arrivalHourCount, arrivalHourIndex } from "./line-demand";
 import { lineAssignmentProfile } from "./line-assignment-profile";
 import { buildRoutingIndex, type RoutingIndex } from "./routing";
@@ -226,6 +227,12 @@ export function assignDestinationArrivals(
     loads: aggregateTrainLoads(index, {
       journeys,
       allocations: [...allocations.values()],
+    }),
+    ...(!onPlan && {
+      transfers: summarizeDiagramTransfers(
+        allocations.values(),
+        (a) => journeys[a.journeyId].legs,
+      ),
     }),
     totals: {
       input,

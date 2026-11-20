@@ -86,8 +86,8 @@ export function diagramTrains(
         (destinationTiming ? 0 : result.config.maxJourneySeconds)
       : Infinity);
   const loads = new Map(
-    result?.loads
-      .filter((l) => l.datasetId === p.datasetId && l.timetableId === diaId)
+    (result?.capacity?.loads ?? result?.loads)
+      ?.filter((l) => l.datasetId === p.datasetId && l.timetableId === diaId)
       .map((l) => [l.trainId, l]),
   );
   return (p.timetables.find((d) => d.id === diaId)?.trains ?? [])

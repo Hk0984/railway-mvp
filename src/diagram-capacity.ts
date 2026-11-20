@@ -7,6 +7,7 @@ import type {
 import { simulateCapacity, type CapacityPlan } from "./capacity-assignment";
 import { transportCapacity } from "./capacity-model";
 import { assignDestinationArrivals } from "./destination-assignment";
+import { summarizeDiagramTransfers } from "./diagram-transfers";
 import { lineAssignmentProfile } from "./line-assignment-profile";
 import {
   arrivalHourCount,
@@ -170,6 +171,7 @@ export function assignDiagramCapacity(
   return {
     config,
     loads: out.loads,
+    transfers: summarizeDiagramTransfers(out.packets, (p) => p.history),
     totals: {
       ...base.totals,
       assigned: out.totals.completed,

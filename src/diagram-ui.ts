@@ -1,8 +1,10 @@
 import { diagramRoutes } from "./diagram-routes";
 import "./diagram.css";
 import { clock } from "./analysis";
-import type { DiagramAssignment } from "./assignment-model";
+import type { AssignmentResult, DiagramAssignment } from "./assignment-model";
 import { capacitySpec } from "./capacity-model";
+import { trainChart } from "./diagram-train-chart";
+import { assignmentTransfers } from "./diagram-transfers";
 import {
   crowdingColors,
   crowdingLimits,
@@ -116,7 +118,7 @@ export function mountDiagram(
   root: HTMLElement,
   project: Project,
   diaId: string,
-  result?: DiagramAssignment,
+  result?: DiagramAssignment | AssignmentResult,
   compact = false,
 ) {
   const settings = readSettings();
@@ -128,6 +130,9 @@ export function mountDiagram(
     });
   const names = new Map(project.stations.map((s) => [s.id, s.name]));
   const types = new Map(project.types.map((t, i) => [t.id, i]));
+  const transfers =
+    result &&
+    ("allocations" in result ? assignmentTransfers(result) : result.transfers);
   const trains = diagramTrains(project, diaId, result).filter(
     (t) => t.segments.length,
   );
@@ -356,6 +361,14 @@ export function mountDiagram(
     const terminal = (id: string | undefined, fallback: string) =>
       project.oud2?.externalTerminals.find((t) => t.id === id)?.name ??
       station(fallback);
+    const origin = terminal(
+      train.externalOrigin?.terminalId,
+      firstLine.from.stationId,
+    );
+    const destination = terminal(
+      train.externalDestination?.terminalId,
+      lastLine.to.stationId,
+    );
     const originTime = train.externalOrigin
       ? train.externalOrigin.externalTime
       : (firstStop?.departure ?? firstLine.start);
@@ -376,32 +389,17 @@ export function mountDiagram(
       : null;
     const type =
       project.types[types.get(train.typeId) ?? -1]?.name ?? train.typeId;
-    const runs = segments.filter((s) => s.kind === "run" || s.kind === "gap");
-    const ceiling = Math.max(settings.limits[0], max?.percent ?? 0);
-    const chartX = (i: number) => 52 + ((i + 0.5) * 384) / runs.length;
-    const chartY = (value: number) => 90 - (value / ceiling) * 68;
-    const chart = max
-      ? `<svg viewBox="0 0 450 116" role="img" aria-label="区間順の混雑率推移。欠測区間は空白">
-      <path d="M52 18V90H436" fill="none" stroke="#a8bcb4"/>
-      <text x="2" y="24" font-size="11">${percent(ceiling)}</text>
-      <text x="20" y="93" font-size="11">0%</text>
-      <text x="52" y="109" font-size="11">始発側</text><text x="400" y="109" font-size="11">終着側</text>
-      ${runs
-        .map((s, i) => {
-          if (s.percent === null) return "";
-          const prior = runs[i - 1]?.percent;
-          return (
-            (prior == null
-              ? ""
-              : `<path d="M${chartX(i - 1)} ${chartY(prior)} L${chartX(i)} ${chartY(s.percent)}" stroke="#315c60" fill="none"/>`) +
-            `<circle cx="${chartX(i)}" cy="${chartY(s.percent)}" r="${s === max ? 5 : 3}" fill="${s === max ? "#a63552" : "#315c60"}"><title>${e(route(s))} ${percent(s.percent)}</title></circle>`
-          );
-        })
-        .join("")}</svg>`
-      : "";
+    const chart = trainChart(service, {
+      station,
+      origin,
+      destination,
+      peak: max,
+      crowdingFloor: settings.limits[0],
+      transfers: transfers && load ? (transfers[load.key] ?? {}) : undefined,
+    });
     detail.innerHTML = `<h3>列車情報</h3><p><strong>${e(train.number || train.id)}</strong> ／ ${e(type)} ／ ${train.direction === "down" ? "下り" : "上り"}</p>
-      <p>${e(terminal(train.externalOrigin?.terminalId, firstLine.from.stationId))} ${originTime === undefined ? "時刻不明" : clock(originTime)} →
-      ${e(terminal(train.externalDestination?.terminalId, lastLine.to.stationId))} ${destinationTime === undefined ? "時刻不明" : clock(destinationTime)}</p>
+      <p>${e(origin)} ${originTime === undefined ? "時刻不明" : clock(originTime)} →
+      ${e(destination)} ${destinationTime === undefined ? "時刻不明" : clock(destinationTime)}</p>
       <p>編成両数 ${spec?.carCount ? n(spec.carCount) + "両" : "未登録"}${spec?.vehicle ? " ／ " + e(spec.vehicle) : ""}</p>
       <p>推計延べ乗車 ${people(load?.totalBoardings)}</p>
       <p>平均混雑率 ${percent(avg)}（算出済み駅間の単純平均）</p>

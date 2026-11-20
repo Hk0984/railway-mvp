@@ -84,6 +84,14 @@ it("honors directional arrival hours, an exact hour boundary, and a transfer acr
   expect(result.loads.map((load) => load.segmentLoads[0])).toEqual([
     90, 0, 80, 80,
   ]);
+  const [direct, , incoming, outgoing] = result.loads;
+  expect(result.transfers?.[direct.key]).toBeUndefined();
+  expect(result.transfers?.[incoming.key]).toEqual({
+    1: { fromConnection: 0, toConnection: 80 },
+  });
+  expect(result.transfers?.[outgoing.key]).toEqual({
+    0: { fromConnection: 80, toConnection: 0 },
+  });
   expect(result.diagnostics.hourlyArrivals?.up[0]).toBe(80);
   expect(result.diagnostics.hourlyArrivals?.down[11]).toBe(90);
   expect(result.diagnostics.hourlyArrivals?.down[12]).toBe(0);
