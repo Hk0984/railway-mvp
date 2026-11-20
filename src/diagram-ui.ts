@@ -3,7 +3,7 @@ import "./diagram.css";
 import { clock } from "./analysis";
 import type { AssignmentResult, DiagramAssignment } from "./assignment-model";
 import { capacitySpec } from "./capacity-model";
-import { trainChart } from "./diagram-train-chart";
+import { stationBoardingChart, trainChart } from "./diagram-train-chart";
 import { assignmentTransfers } from "./diagram-transfers";
 import {
   crowdingColors,
@@ -389,21 +389,23 @@ export function mountDiagram(
       : null;
     const type =
       project.types[types.get(train.typeId) ?? -1]?.name ?? train.typeId;
+    const trainTransfers = transfers && load ? (transfers[load.key] ?? {}) : undefined;
     const chart = trainChart(service, {
       station,
       origin,
       destination,
       peak: max,
       crowdingFloor: settings.limits[0],
-      transfers: transfers && load ? (transfers[load.key] ?? {}) : undefined,
+      transfers: trainTransfers,
     });
+    const boarding = stationBoardingChart(load, station, trainTransfers);
     detail.innerHTML = `<h3>列車情報</h3><p><strong>${e(train.number || train.id)}</strong> ／ ${e(type)} ／ ${train.direction === "down" ? "下り" : "上り"}</p>
       <p>${e(origin)} ${originTime === undefined ? "時刻不明" : clock(originTime)} →
       ${e(destination)} ${destinationTime === undefined ? "時刻不明" : clock(destinationTime)}</p>
       <p>編成両数 ${spec?.carCount ? n(spec.carCount) + "両" : "未登録"}${spec?.vehicle ? " ／ " + e(spec.vehicle) : ""}</p>
       <p>推計延べ乗車 ${people(load?.totalBoardings)}</p>
       <p>平均混雑率 ${percent(avg)}（算出済み駅間の単純平均）</p>
-      <p>最大混雑率 ${percent(max?.percent)}${max ? " ／ " + e(route(max)) : ""}</p>${chart}`;
+      <p>最大混雑率 ${percent(max?.percent)}${max ? " ／ " + e(route(max)) : ""}</p>${chart}${boarding}`;
   }
 
   function showSegment(segment?: DiagramSegment) {

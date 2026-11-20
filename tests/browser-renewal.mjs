@@ -68,6 +68,21 @@ try {
     await trainChart.locator(".diagram-chart-station").allTextContents(),
     ["緑丘ニュータウン", "東雲学園"],
   );
+  const boardingChart = page.getByRole("region", { name: "駅別の乗降グラフ" });
+  assert.deepEqual(
+    await boardingChart.locator(".diagram-chart-station").allTextContents(),
+    ["緑丘ニュータウン", "桜川", "中央市", "港ビジネス街", "東雲学園"],
+  );
+  assert.ok(
+    (await boardingChart.locator("rect.diagram-boarding-board").count()) > 0,
+  );
+  assert.ok(
+    (await boardingChart.locator("rect.diagram-boarding-alight").count()) > 0,
+  );
+  const stationNumbers = page.locator(".diagram-boarding details");
+  await stationNumbers.locator("summary").click();
+  assert.equal(await stationNumbers.locator("tbody tr").count(), 5);
+  await stationNumbers.locator("summary").click();
   await page.locator("#diagram-section").selectOption("0");
   assert.match(
     await page.locator("#diagram-segment-detail").innerText(),
@@ -330,6 +345,7 @@ try {
   await page
     .locator("#diagram-train")
     .selectOption({ label: "201 ／ 普通 ／ 上り" });
+  await page.getByText("駅別の乗降人数 未算出", { exact: true }).waitFor();
   await page.locator("#diagram-section").selectOption("0");
   assert.match(
     await page.locator("#diagram-segment-detail").innerText(),

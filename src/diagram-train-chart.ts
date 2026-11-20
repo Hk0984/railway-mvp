@@ -1,4 +1,4 @@
-import type { DiagramTransfer } from "./assignment-model";
+import type { DiagramTransfer, TrainLoad } from "./assignment-model";
 import type { DiagramSegment, DiagramTrain } from "./diagram-model";
 import { escapeHtml as e, numberText as n } from "./ui-utils";
 
@@ -8,6 +8,130 @@ const transferDirections = [
   ["fromConnection", "from", "接続列車から"],
   ["toConnection", "to", "接続列車へ"],
 ] as const;
+
+const boardingDirections = [
+  ["board", "乗車", "fromConnection", "from", "接続列車から"],
+  ["alight", "降車", "toConnection", "to", "接続列車へ"],
+] as const;
+
+export function stationBoardingChart(
+  load: TrainLoad | undefined,
+  station: (id: string) => string,
+  transfers?: Record<number, DiagramTransfer>,
+) {
+  if (!load) return '<p class="muted">駅別の乗降人数 未算出</p>';
+  const stops = load.stops.flatMap((stop, i) => {
+    const board = load.boardings[i] ?? 0;
+    const alight = load.alightings[i] ?? 0;
+    if (stop.status !== "stop" && !board && !alight) return [];
+    const transfer = transfers?.[i];
+    return [
+      {
+        name: station(stop.stationId),
+        board,
+        alight,
+        fromConnection: Math.min(board, transfer?.fromConnection ?? 0),
+        toConnection: Math.min(alight, transfer?.toConnection ?? 0),
+      },
+    ];
+  });
+  if (!stops.length) return "";
+
+  const peak = Math.ceil(
+    Math.max(1, ...stops.map((stop) => Math.max(stop.board, stop.alight))),
+  );
+  const left = Math.max(54, people(peak).length * 7 + 12);
+  const right = 14;
+  const top = 14;
+  const base = 102;
+  const width = Math.max(310, left + right + stops.length * 22);
+  const height =
+    base +
+    16 +
+    12 * Math.max(...stops.map(({ name }) => Array.from(name).length));
+  const step = (width - left - right) / stops.length;
+  const unit = (base - top) / peak;
+  const marks = stops
+    .map((stop, i) => {
+      const x = left + (i + 0.5) * step;
+      const bars = boardingDirections
+        .map(([key, label, direction, color, connection], side) => {
+          const total = stop[key];
+          const transferred = stop[direction];
+          const other = total - transferred;
+          const barX = x + (side ? 1 : -9);
+          const rect = (
+            count: number,
+            offset: number,
+            style: string,
+            part: string,
+          ) =>
+            count > 0
+              ? `<rect class="${style}" x="${barX}" y="${base - (offset + count) * unit}" width="8" height="${count * unit}"><title>${e(stop.name)} ${label}${part} ${people(count)}（計 ${people(total)}）</title></rect>`
+              : "";
+          return (
+            rect(
+              other,
+              0,
+              `diagram-boarding-${key}`,
+              transfers ? "・その他" : "",
+            ) +
+            rect(
+              transferred,
+              other,
+              `diagram-transfer-${color}`,
+              `・${connection}`,
+            )
+          );
+        })
+        .join("");
+      return `<g>${bars}<path class="diagram-chart-axis" d="M${x} ${base}v4"/>
+      <text class="diagram-chart-station vertical" x="${x}" y="${base + 9}">${e(stop.name)}</text></g>`;
+    })
+    .join("");
+  const legend = boardingDirections
+    .map(
+      ([direction, label, , color, connection]) =>
+        `<span><i class="diagram-boarding-${direction}" aria-hidden="true"></i>${label}${transfers ? "（その他）" : ""}</span>` +
+        (transfers
+          ? `<span><i class="diagram-transfer-${color}" aria-hidden="true"></i>${label}（${connection}）</span>`
+          : ""),
+    )
+    .join("");
+  const headers = boardingDirections
+    .map(
+      ([, label, , , connection]) =>
+        `<th scope="col">${label}合計</th>${transfers ? `<th scope="col">うち${connection}</th>` : ""}`,
+    )
+    .join("");
+  const rows = stops
+    .map(
+      (stop) =>
+        `<tr><th scope="row">${e(stop.name)}</th>${boardingDirections
+          .map(
+            ([direction, , connection]) =>
+              `<td>${people(stop[direction])}</td>${transfers ? `<td>${people(stop[connection])}</td>` : ""}`,
+          )
+          .join("")}</tr>`,
+    )
+    .join("");
+  return `<div class="diagram-boarding">
+    <h4>駅別の乗降人数（推計）</h4>
+    <p class="muted">左の棒が乗車、右の棒が降車です。${transfers ? "" : "乗換の内訳は未算出です。"}</p>
+    <div class="diagram-transfer-legend">${legend}</div>
+    <div class="diagram-boarding-chart" tabindex="0" role="region" aria-label="駅別の乗降グラフ">
+      <svg width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" role="img" aria-label="計算対象の駅別乗車・降車人数${transfers ? "と、そのうちの乗換人数" : ""}">
+        <path class="diagram-chart-axis" d="M${left} ${top}V${base}H${width - right}"/>
+        <text x="${left - 6}" y="${top + 4}" text-anchor="end">${people(peak)}</text>
+        <text x="${left - 6}" y="${base + 4}" text-anchor="end">0人</text>
+        ${marks}
+      </svg>
+    </div>
+    <details class="diagram-transfer-values"><summary>駅別乗降の内訳</summary>
+      <div class="diagram-boarding-table"><table><thead><tr><th scope="col">駅</th>${headers}</tr></thead><tbody>${rows}</tbody></table></div>
+    </details>
+  </div>`;
+}
 
 export function trainChart(
   service: DiagramTrain,

@@ -67,11 +67,13 @@
 .diagram-details p {
   margin: 0.25rem 0;
 }
-.diagram-train-chart {
+.diagram-train-chart,
+.diagram-boarding-chart {
   margin-top: 0.65rem;
   overflow-x: auto;
 }
-.diagram-train-chart svg {
+.diagram-train-chart svg,
+.diagram-boarding-chart svg {
   display: block;
   max-width: none;
   fill: currentColor;
@@ -104,6 +106,25 @@
 .diagram-transfer-to {
   fill: #a64f16;
   background-color: #a64f16;
+}
+.diagram-boarding {
+  margin-top: 0.85rem;
+  padding-top: 0.65rem;
+  border-top: 1px solid #d7e2dd;
+}
+.diagram-boarding h4 {
+  margin: 0;
+}
+.diagram-boarding-board {
+  fill: #78b9a7;
+  background-color: #78b9a7;
+}
+.diagram-boarding-alight {
+  fill: #e6b377;
+  background-color: #e6b377;
+}
+.diagram-boarding-table {
+  overflow-x: auto;
 }
 .diagram-transfer-legend {
   display: flex;

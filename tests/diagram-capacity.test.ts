@@ -5,6 +5,7 @@ import {
   type AssignmentDemand,
 } from "../src/assignment-model";
 import { assignDiagramCapacity } from "../src/diagram-capacity";
+import { stationBoardingChart } from "../src/diagram-train-chart";
 import { assignmentTransfers } from "../src/diagram-transfers";
 import { serviceDay } from "../src/line-demand";
 import type { Train } from "../src/model";
@@ -168,6 +169,20 @@ describe("乗車上限", () => {
       [first.key]: { 0: { fromConnection: 50, toConnection: 0 } },
       [later.key]: { 0: { fromConnection: 50, toConnection: 0 } },
     });
+    const boarded = stationBoardingChart(
+      limited.loads[1],
+      (id) => id,
+      limited.transfers?.[first.key],
+    );
+    expect(boarded).toContain("s2 乗車・その他 10人（計 60人）");
+    expect(boarded).toContain("s2 乗車・接続列車から 50人（計 60人）");
+    const alighted = stationBoardingChart(
+      limited.loads[0],
+      (id) => id,
+      limited.transfers?.[incoming.key],
+    );
+    expect(alighted).toContain("s2 降車・その他 55人（計 155人）");
+    expect(alighted).toContain("s2 降車・接続列車へ 100人（計 155人）");
   });
 
   it("uses the recorded boundary time on an explicitly selected through service", () => {
