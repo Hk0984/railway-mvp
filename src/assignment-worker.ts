@@ -1,6 +1,7 @@
 /// <reference lib="webworker" />
 import { buildRoutingIndex } from "./routing";
 import { assignDiagramCapacity } from "./diagram-capacity";
+import { preferThroughJourneys } from "./diagram-continuation";
 import { assignDemand } from "./assignment";
 import { assignDestinationArrivals } from "./destination-assignment";
 import { lineAssignmentProfile } from "./line-assignment-profile";
@@ -87,7 +88,10 @@ self.onmessage = (
               total,
               stage,
             }),
-          fast ? lineAssignmentProfile(index) : undefined,
+          fast
+            ? lineAssignmentProfile(index, { retainThrough: true })
+            : undefined,
+          fast ? preferThroughJourneys : undefined,
         ),
       );
     }

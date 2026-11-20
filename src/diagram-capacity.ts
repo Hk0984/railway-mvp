@@ -9,6 +9,7 @@ import { transportCapacity } from "./capacity-model";
 import { assignDestinationArrivals } from "./destination-assignment";
 import { summarizeDiagramTransfers } from "./diagram-transfers";
 import { lineAssignmentProfile } from "./line-assignment-profile";
+import { preferThroughJourneys } from "./diagram-continuation";
 import {
   arrivalHourCount,
   arrivalHourIndex,
@@ -79,7 +80,7 @@ function destinationPlan(
 }
 
 function laterProfiles(index: RoutingIndex, config: AssignmentConfig) {
-  const profile = lineAssignmentProfile(index);
+  const profile = lineAssignmentProfile(index, { retainThrough: true });
   const cache = new Map<string, Journey[]>();
   return (q: RouteQuery, row: AssignmentDemand) => {
     const key = JSON.stringify([
@@ -104,7 +105,12 @@ function laterProfiles(index: RoutingIndex, config: AssignmentConfig) {
       if (cache.size >= 2048) cache.delete(cache.keys().next().value!);
       cache.set(key, journeys);
     }
-    return journeys;
+    return preferThroughJourneys(
+      journeys.filter(
+        (journey) =>
+          journey.departure >= q.time && journey.arrival <= q.windowEnd!,
+      ),
+    );
   };
 }
 
@@ -143,7 +149,8 @@ export function assignDiagramCapacity(
         rows,
         config,
         onProgress,
-        lineAssignmentProfile(index),
+        lineAssignmentProfile(index, { retainThrough: true }),
+        preferThroughJourneys,
       );
   const out = simulateCapacity(index, base, config, onProgress, {
     percent,

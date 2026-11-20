@@ -130,6 +130,7 @@ export function assignDemand(
   config: AssignmentConfig,
   onProgress?: (done: number, total: number, stage?: "od" | "events") => void,
   profile = (query: RouteQuery) => cachedProfile(index, query),
+  selectCandidates?: (feasible: Journey[]) => Journey[],
 ): AssignmentResult {
   validateInputs(index, input, config);
   if (config.capacityConstrained) {
@@ -300,7 +301,7 @@ export function assignDemand(
         const rankingKey = JSON.stringify([row.purpose, arrival]);
         const ranked =
           rankingCache.get(rankingKey) ??
-          feasible
+          (selectCandidates ? selectCandidates(feasible) : feasible)
             .map((j) => ({ j, cost: generalizedCost(j, arrival, coeff) }))
             .sort((x, y) =>
               config.method === "fastest"

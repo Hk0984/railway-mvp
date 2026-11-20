@@ -5,6 +5,7 @@ import {
   type AssignmentDemand,
 } from "../src/assignment-model";
 import { lineAssignmentProfile } from "../src/line-assignment-profile";
+import { preferThroughJourneys } from "../src/diagram-continuation";
 import { buildRoutingIndex, journeyProfile } from "../src/routing";
 import { sampleProject } from "../src/sample";
 import {
@@ -90,6 +91,53 @@ describe("fast single-line assignment", () => {
     );
     expect(result.loads.map((l) => l.segmentLoads[0])).toEqual([200, 180, 200]);
     expect(result.totals.unassigned).toBe(20);
+  });
+
+  it("prefers staying for a small saving while preserving a transfer needed to meet the journey limit", () => {
+    const p = sampleProject();
+    const dia = p.timetables[0];
+    const [through, local] = dia.trains;
+    through.stops = [
+      { stationId: "s0", status: "stop", departure: 300 },
+      { stationId: "s2", status: "stop", arrival: 420, departure: 450 },
+      { stationId: "s4", status: "stop", arrival: 800 },
+    ];
+    local.stops = [
+      { stationId: "s2", status: "stop", departure: 540 },
+      { stationId: "s4", status: "stop", arrival: 680 },
+    ];
+    dia.trains = [through, local];
+    const index = buildRoutingIndex([
+      { datasetId: p.datasetId!, project: p, timetableId: dia.id },
+    ]);
+    const config = {
+      ...defaultAssignmentConfig(),
+      start: 200,
+      end: 300,
+      maxJourneySeconds: 550,
+    };
+    const row: AssignmentDemand = {
+      datasetId: p.datasetId!,
+      origin: "s0",
+      destination: "s4",
+      purpose: "private",
+      kind: "outbound",
+      source: "manual",
+      start: 200,
+      end: 300,
+      passengers: 100,
+    };
+    const result = assignDemand(
+      index,
+      [row],
+      config,
+      undefined,
+      lineAssignmentProfile(index, { retainThrough: true }),
+      preferThroughJourneys,
+    );
+    expect(result.totals).toMatchObject({ assigned: 100, unassigned: 0 });
+    expect(result.loads[0].segmentLoads).toEqual([100, 50]);
+    expect(result.loads[1].segmentLoads).toEqual([50]);
   });
 
   it("supports a restricted boundary stop with explicit passing time", () => {

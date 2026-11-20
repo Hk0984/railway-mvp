@@ -1,5 +1,9 @@
 import { expect, it } from "vitest";
-import { defaultAssignmentConfig } from "../src/assignment-model";
+import {
+  defaultAssignmentConfig,
+  type AssignmentDemand,
+} from "../src/assignment-model";
+import { assignDiagramCapacity } from "../src/diagram-capacity";
 import { assignDestinationArrivals } from "../src/destination-assignment";
 import {
   demandMass,
@@ -19,6 +23,140 @@ import { sampleProject } from "../src/sample";
 import type { Direction, Train } from "../src/model";
 
 const at = (hours: number, minutes = 0) => hours * 3600 + minutes * 60;
+
+function continuationExample(
+  throughArrival: number,
+  includeEarlierLocal = false,
+) {
+  const project = sampleProject();
+  const dia = project.timetables[0];
+  const [first, second] = dia.trains;
+  dia.trains = [
+    {
+      ...first,
+      id: "through",
+      stops: [
+        { stationId: "s0", status: "stop", departure: at(8) },
+        {
+          stationId: "s2",
+          status: "stop",
+          arrival: at(8, 10),
+          departure: at(8, 11),
+        },
+        { stationId: "s4", status: "stop", arrival: throughArrival },
+      ],
+    },
+    {
+      ...second,
+      id: "local",
+      stops: [
+        ...(includeEarlierLocal
+          ? [{ stationId: "s0", status: "stop" as const, departure: at(7, 55) }]
+          : []),
+        {
+          stationId: "s2",
+          status: "stop",
+          arrival: at(8, 12),
+          departure: at(8, 13),
+        },
+        { stationId: "s4", status: "stop", arrival: at(8, 30) },
+      ],
+    },
+  ];
+  const row: AssignmentDemand = {
+    datasetId: project.datasetId!,
+    start: at(8),
+    end: at(9),
+    arrivalDirection: "down",
+    origin: "s0",
+    destination: "s4",
+    passengers: 60,
+    purpose: "commute",
+    source: "manual",
+    kind: "outbound",
+  };
+  const index = buildRoutingIndex([
+    { datasetId: row.datasetId, project, timetableId: dia.id },
+  ]);
+  return {
+    project,
+    index,
+    row,
+    config: { ...defaultAssignmentConfig(), ...serviceDay(project) },
+  };
+}
+
+it.each([22, 32])(
+  "keeps the first train at an 08:%i through arrival, including with a boarding limit",
+  (minute) => {
+    const { index, config, row } = continuationExample(at(8, minute));
+    for (const result of [
+      assignDestinationArrivals(index, [row], config),
+      assignDiagramCapacity(index, [row], config, 100),
+    ]) {
+      expect(result.totals).toMatchObject({
+        assigned: 60,
+        unassigned: 0,
+        boardingEvents: 60,
+      });
+      expect(result.loads.map((load) => load.totalBoardings)).toEqual([60, 0]);
+      expect(result.diagnostics.hourlyArrivals?.down[8]).toBe(60);
+    }
+  },
+);
+
+it("keeps a direct local candidate after rejecting a needless transfer to it", () => {
+  const { index, config, row } = continuationExample(at(8, 22), true);
+  const result = assignDestinationArrivals(index, [row], config);
+  expect(result.loads.map((load) => load.totalBoardings)).toEqual([26, 34]);
+  expect(result.totals).toMatchObject({
+    assigned: 60,
+    unassigned: 0,
+    boardingEvents: 60,
+  });
+});
+
+it("finds an earlier feeder that needs the transfer after rejecting a needless transfer to the same local", () => {
+  const { project, config, row } = continuationExample(at(8, 22));
+  const dia = project.timetables[0];
+  dia.trains.push({
+    ...dia.trains[0],
+    id: "feeder",
+    stops: [
+      { stationId: "s0", status: "stop", departure: at(7, 56) },
+      { stationId: "s2", status: "stop", arrival: at(8, 10) },
+    ],
+  });
+  const index = buildRoutingIndex([
+    { datasetId: row.datasetId, project, timetableId: dia.id },
+  ]);
+  const result = assignDestinationArrivals(index, [row], config);
+  expect(result.loads.map((load) => load.totalBoardings)).toEqual([26, 34, 34]);
+  expect(result.totals).toMatchObject({ assigned: 60, unassigned: 0 });
+});
+
+it("permits a three-minute saving or a transfer needed to reach the requested window", () => {
+  const { index, config, row } = continuationExample(at(8, 33));
+  const saving = assignDestinationArrivals(
+    index,
+    [{ ...row, end: at(8, 32) }],
+    config,
+  );
+  expect(saving.loads.map((load) => load.totalBoardings)).toEqual([60, 60]);
+  const bothAvailable = assignDestinationArrivals(index, [row], config);
+  expect(bothAvailable.loads[1].totalBoardings).toBeGreaterThan(0);
+  const earlier = continuationExample(at(8, 22));
+  const desired = assignDestinationArrivals(
+    earlier.index,
+    [{ ...earlier.row, start: at(8, 28), end: at(8, 31) }],
+    earlier.config,
+  );
+  expect(desired.totals).toMatchObject({
+    assigned: 60,
+    unassigned: 0,
+    boardingEvents: 120,
+  });
+});
 
 it("honors directional arrival hours, an exact hour boundary, and a transfer across midnight", () => {
   const project = sampleProject();

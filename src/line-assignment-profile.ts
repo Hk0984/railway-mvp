@@ -18,6 +18,10 @@ type Offer = {
   arrival: number;
   riding: number;
 };
+interface ProfileOptions {
+  latestDeparture?: number;
+  allowsTransfer?: (first: Ride, second: Ride) => boolean;
+}
 
 const preferences: RidePreference[] = [-1, 0, 1];
 const seconds = (ride: Ride) => ride.arrival - ride.departure;
@@ -29,6 +33,13 @@ function better(a: Offer, b: Offer, preference: RidePreference) {
       Number(!!a.second) - Number(!!b.second) ||
       preference * (a.riding - b.riding) ||
       offerKey(a).localeCompare(offerKey(b))) < 0
+  );
+}
+function earlierRide(a: Ride, b: Ride, preference: RidePreference) {
+  return (
+    (a.arrival - b.arrival ||
+      preference * (seconds(a) - seconds(b)) ||
+      rideKey(a).localeCompare(rideKey(b))) < 0
   );
 }
 function lowerBound<T>(
@@ -104,7 +115,11 @@ function destinationIndex(
   // A reverse pass gives the earliest useful continuation after any ready time.
   // Retain the riding-time extremes and the lexical winner for generalized-cost ties.
   const transfers = new Map<string, { entries: Ride[]; best: Ride[][] }>();
-  function next(station: string, ready: number) {
+  function next(
+    station: string,
+    ready: number,
+    allows?: (ride: Ride) => boolean,
+  ) {
     let list = transfers.get(station);
     if (!list) {
       const entries = (index.boards.get(station) ?? []).flatMap(direct);
@@ -114,20 +129,31 @@ function destinationIndex(
         const current = entries[i];
         suffix = preferences.map((preference, j) => {
           const prior = suffix[j];
-          if (
-            !prior ||
-            (current.arrival - prior.arrival ||
-              preference * (seconds(current) - seconds(prior)) ||
-              rideKey(current).localeCompare(rideKey(prior))) < 0
-          )
-            return current;
+          if (!prior || earlierRide(current, prior, preference)) return current;
           return prior;
         });
         best[i] = [...new Set(suffix as Ride[])];
       }
       transfers.set(station, (list = { entries, best }));
     }
-    return list.best[lowerBound(list.entries, ready, (r) => r.departure)] ?? [];
+    const start = lowerBound(list.entries, ready, (r) => r.departure);
+    const best = list.best[start] ?? [];
+    if (!allows || best.every(allows)) return best;
+
+    // A preferred continuation may require a pointless transfer. Look for
+    // the best remaining continuation before choosing the final itinerary.
+    let filtered: (Ride | undefined)[] = [];
+    for (let i = start; i < list.entries.length; i++) {
+      if (filtered[0] && list.best[i][0].arrival > filtered[0].arrival) break;
+      const ride = list.entries[i];
+      if (ride.arrival > (filtered[0]?.arrival ?? Infinity) || !allows(ride))
+        continue;
+      filtered = preferences.map((preference, j) => {
+        const prior = filtered[j];
+        return !prior || earlierRide(ride, prior, preference) ? ride : prior;
+      });
+    }
+    return [...new Set(filtered.filter((ride): ride is Ride => !!ride))];
   }
   return { direct, next };
 }
@@ -137,12 +163,16 @@ function destinationIndex(
  * transfer. A later arrival from the same first boarding cannot win or become
  * feasible when the earlier arrival is outside the journey-time bound.
  */
-export function lineAssignmentProfile(index: RoutingIndex) {
+export function lineAssignmentProfile(
+  index: RoutingIndex,
+  { retainThrough = false }: { retainThrough?: boolean } = {},
+) {
   const destinations = new Map<string, ReturnType<typeof destinationIndex>>();
   return (
     q: RouteQuery,
     firstDirection?: Direction,
     lastDirection?: Direction,
+    { latestDeparture, allowsTransfer }: ProfileOptions = {},
   ): Journey[] => {
     const origin = stationKey(q.origin),
       destination = stationKey(q.destination);
@@ -175,7 +205,7 @@ export function lineAssignmentProfile(index: RoutingIndex) {
       i++
     ) {
       const board = boards[i];
-      if (board.departure > latest) break;
+      if (board.departure > (latestDeparture ?? latest)) break;
       if (allowed && !allowed.has(board.trip.train.id)) continue;
       if (firstDirection && board.trip.train.direction !== firstDirection)
         continue;
@@ -187,8 +217,12 @@ export function lineAssignmentProfile(index: RoutingIndex) {
           if (!prior || better(offer, prior, preference)) best[j] = offer;
         }
       };
-      for (const first of target.direct(board))
-        consider({ first, arrival: first.arrival, riding: seconds(first) });
+      const direct = target.direct(board).map((first): Offer => ({
+        first,
+        arrival: first.arrival,
+        riding: seconds(first),
+      }));
+      for (const offer of direct) consider(offer);
       if (!q.directOnly && q.maxTransfers === 1) {
         const trip = board.trip;
         for (let j = board.index + 1; j < trip.visits.length; j++) {
@@ -211,6 +245,9 @@ export function lineAssignmentProfile(index: RoutingIndex) {
           for (const second of target.next(
             station,
             arrival + q.minimumTransferSeconds,
+            allowsTransfer
+              ? (ride) => ride.trip !== trip && allowsTransfer(first, ride)
+              : undefined,
           )) {
             // Reboarding the same train never improves on riding through.
             if (second.trip === trip) continue;
@@ -224,8 +261,10 @@ export function lineAssignmentProfile(index: RoutingIndex) {
         }
       }
       const identities = new Set<string>();
-      for (const offer of best) {
-        if (!offer) continue;
+      for (const offer of retainThrough && best[0]?.second
+        ? [...best, ...direct]
+        : best) {
+        if (!offer || offer.arrival > latest) continue;
         const id = offerKey(offer);
         if (identities.has(id)) continue;
         identities.add(id);
