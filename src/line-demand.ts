@@ -3,6 +3,16 @@ import type { AssignmentDemand } from "./assignment-model";
 import { demandMass, hourlyDemandCurve } from "./hourly-demand-curve";
 import { isPassengerTrain } from "./classification";
 import type { Direction, Project, Timetable, Train } from "./model";
+import {
+  defaultPurposeShares,
+  purposeHours,
+  stationRoles,
+  tripPurposes,
+  validateStationProfile,
+  type PurposeShares,
+  type StationDemandProfile,
+  type TripPurpose,
+} from "./station-demand-profile";
 
 export const periods = [
   { label: "朝", note: "06:00–10:00", from: 6, to: 10 },
@@ -32,6 +42,8 @@ export interface OutsideArea {
 }
 export interface LineDemand {
   counts: Record<string, StationCounts>;
+  stationProfiles?: Record<string, StationDemandProfile>;
+  stationProfileTiming?: boolean;
   shares: Record<"local", number[]> &
     Partial<Record<"inbound" | "outbound", number[]>>;
   destinationArrival?: {
@@ -91,15 +103,34 @@ export function validateLineDemand(project: Project) {
     !validBoardingLimit(d.boardingLimitPercent)
   )
     throw new Error("乗車上限の混雑率は0%以上の数値で入力してください");
-  const stationIds = new Set(project.stations.map((s) => s.id));
+  const stations = new Map(project.stations.map((s) => [s.id, s.name]));
   for (const [id, v] of Object.entries(d.counts)) {
     if (
-      !stationIds.has(id) ||
+      !stations.has(id) ||
       !v ||
       ![v.board, v.alight, v.weight].every(nonnegative)
     )
       throw new Error("駅別人数と行先の重みには0以上の数値を入力してください");
   }
+  if (d.stationProfiles !== undefined) {
+    if (
+      !d.stationProfiles ||
+      typeof d.stationProfiles !== "object" ||
+      Array.isArray(d.stationProfiles)
+    )
+      throw new Error("駅の属性・利用目的の設定形式を確認してください");
+    for (const [id, profile] of Object.entries(d.stationProfiles)) {
+      if (!stations.has(id))
+        throw new Error("駅の属性に登録されていない駅があります");
+      validateStationProfile(profile, stations.get(id)!);
+    }
+  }
+  if (
+    (d.stationProfileTiming !== undefined &&
+      typeof d.stationProfileTiming !== "boolean") ||
+    (d.stationProfileTiming && d.destinationArrival?.enabled)
+  )
+    throw new Error("駅属性から推計する時間帯の設定を確認してください");
   for (const flow of ["local", "inbound", "outbound"] as const) {
     const shares = d.shares[flow];
     if (flow !== "local" && shares === undefined) continue;
@@ -140,7 +171,7 @@ export function validateLineDemand(project: Project) {
       ids.has(a.id) ||
       typeof a.name !== "string" ||
       !a.name.trim() ||
-      !stationIds.has(a.stationId) ||
+      !stations.has(a.stationId) ||
       ![a.inbound, a.outbound].every(nonnegative) ||
       typeof a.included !== "boolean" ||
       !["transfer", "through"].includes(a.mode) ||
@@ -286,6 +317,95 @@ function reachability(trains: Train[]) {
   };
 }
 
+const sum = (values: readonly number[]) => values.reduce((a, b) => a + b, 0);
+
+function profileVolumes(
+  origin: StationDemandProfile | undefined,
+  amount: number,
+  targets: {
+    id: string;
+    base: number;
+    roles: ReturnType<typeof stationRoles>;
+    direction?: Direction;
+  }[],
+  timing: {
+    usesArrival: boolean;
+    manual?: Record<Direction | "local", number[]>;
+  },
+  emit: (
+    destination: string,
+    volume: number,
+    slot: number,
+    purpose: TripPurpose,
+    direction?: Direction,
+  ) => void,
+) {
+  const shares =
+    origin?.shares ?? defaultPurposeShares(origin?.primary, origin?.secondary);
+  const roles = stationRoles(origin);
+  const { usesArrival, manual } = timing;
+  for (const purpose of tripPurposes) {
+    const volume = (amount * shares[purpose]) / 100;
+    if (!volume) continue;
+    const scores = targets.map((target) => {
+      const hours = purposeHours(roles, target.roles, purpose);
+      const slots = usesArrival
+        ? hours
+        : periods.map(({ from, to }) => {
+            let weight = 0;
+            for (let h = from; h < to; h++)
+              weight += hours[h % arrivalHourCount];
+            return weight;
+          });
+      return { ...target, slots, score: target.base * sum(slots) };
+    });
+    const totalScore = sum(scores.map(({ score }) => score));
+    if (!manual) {
+      for (const target of scores)
+        target.slots.forEach((weight, i) => {
+          if (weight)
+            emit(
+              target.id,
+              (volume * target.base * weight) / totalScore,
+              i,
+              purpose,
+              target.direction,
+            );
+        });
+      continue;
+    }
+    // Fix each direction's hourly totals at the chosen percentages, then
+    // distribute each slot among destinations. The origin's purpose totals hold.
+    for (const group of usesArrival
+      ? arrivalDirections
+      : (["local"] as const)) {
+      const candidates = usesArrival
+        ? scores.filter((target) => target.direction === group)
+        : scores;
+      const groupScore = sum(candidates.map(({ score }) => score));
+      if (!groupScore) continue;
+      manual[group].forEach((share, i) => {
+        if (!share) return;
+        const slotVolume = (volume * groupScore * share) / (totalScore * 100);
+        const slotScore = sum(candidates.map((t) => t.base * t.slots[i]));
+        for (const target of candidates) {
+          const fraction = slotScore
+            ? (target.base * target.slots[i]) / slotScore
+            : target.score / groupScore;
+          if (fraction)
+            emit(
+              target.id,
+              slotVolume * fraction,
+              i,
+              purpose,
+              target.direction,
+            );
+        }
+      });
+    }
+  }
+}
+
 export function estimateLineDemand(project: Project, diaId: string) {
   validateLineDemand(project);
   const settings = project.lineDemand ?? defaultLineDemand();
@@ -320,7 +440,13 @@ export function estimateLineDemand(project: Project, diaId: string) {
   const arrival = settings.destinationArrival?.enabled
     ? settings.destinationArrival
     : undefined;
-  const windows = arrival ? hourlyWindows(start, end) : timeWindows(start, end);
+  const automaticTiming = settings.stationProfileTiming === true;
+  const useProfiles =
+    automaticTiming || Object.keys(settings.stationProfiles ?? {}).length > 0;
+  const usesArrival = automaticTiming || arrival !== undefined;
+  const windows = usesArrival
+    ? hourlyWindows(start, end)
+    : timeWindows(start, end);
   const curves = arrival?.smooth
     ? {
         up: hourlyDemandCurve(arrival.shares.up, true),
@@ -335,19 +461,65 @@ export function estimateLineDemand(project: Project, diaId: string) {
       intervals.map((w) => demandMass(curves.down[i], w.start, w.end)),
     ),
   };
-  const directionFor = arrival ? arrivalDirectionFor(project) : undefined;
-  const byArrival = arrival
+  const directionFor = usesArrival ? arrivalDirectionFor(project) : undefined;
+  const byArrival = usesArrival
     ? {
         up: Array<number>(arrivalHourCount).fill(0),
         down: Array<number>(arrivalHourCount).fill(0),
       }
     : undefined;
+  const inferredExternalShares = automaticTiming
+    ? {
+        inbound: initialArrivalShares(
+          settings.shares.inbound ?? settings.shares.local,
+        ),
+        outbound: initialArrivalShares(
+          settings.shares.outbound ?? settings.shares.local,
+        ),
+      }
+    : undefined;
+  const byPurpose: PurposeShares | undefined = useProfiles
+    ? { commute: 0, school: 0, private: 0 }
+    : undefined;
+  const roles = useProfiles
+    ? new Map(
+        ids.map((id) => [id, stationRoles(settings.stationProfiles?.[id])]),
+      )
+    : undefined;
   const rows: AssignmentDemand[] = [];
+  const splitAutomatic: { rows: AssignmentDemand[]; volume: number }[] = [];
   const destinations = new Map<string, number>();
   const byTime = periods.map(() => 0);
   const external = { inbound: 0, outbound: 0 };
   const warnings: string[] = [];
   let rejected = 0;
+  const allocateWindow = (
+    row: Omit<AssignmentDemand, "start" | "end" | "passengers">,
+    volume: number,
+    i: number,
+  ) => {
+    if (!volume) return;
+    const intervals = windows[i];
+    const direction = row.arrivalDirection;
+    if (byArrival && direction) byArrival[direction][i] += volume;
+    else byTime[i] += volume;
+    if (intervals.length === 1) {
+      rows.push({ ...row, ...intervals[0], passengers: volume });
+      return;
+    }
+    const weights =
+      (direction && windowWeights?.[direction][i]) ??
+      intervals.map((w) => w.end - w.start);
+    const weightSum = sum(weights);
+    const parts = intervals.map((w, j) => ({
+      ...row,
+      ...w,
+      passengers: (volume * weights[j]) / weightSum,
+    }));
+    rows.push(...parts);
+    if (automaticTiming && parts.length > 1)
+      splitAutomatic.push({ rows: parts, volume });
+  };
   const add = (
     origin: string,
     destination: string,
@@ -364,32 +536,41 @@ export function estimateLineDemand(project: Project, diaId: string) {
     const shares =
       arrival && direction
         ? arrival.shares[direction]
-        : (settings.shares[flow] ?? settings.shares.local);
-    for (const [i, intervals] of windows.entries()) {
-      const volume = (amount * shares[i]) / 100;
-      if (!volume) continue;
-      if (byArrival && direction) byArrival[direction][i] += volume;
-      else byTime[i] += volume;
-      const weights =
-        (direction && windowWeights?.[direction][i]) ??
-        intervals.map((w) => w.end - w.start);
-      const weightSum = total(weights);
-      for (const [j, w] of intervals.entries())
-        rows.push({
-          datasetId: project.datasetId!,
-          origin,
-          destination,
-          ...w,
-          source: "estimated",
-          purpose: "private",
-          kind: "outbound",
-          passengers: (volume * weights[j]) / weightSum,
-          ...(direction && { arrivalDirection: direction }),
-          ...(trains &&
-            (flow === "inbound"
-              ? { boundaryOriginTrains: trains }
-              : { boundaryDestinationTrains: trains })),
-        });
+        : ((flow === "local" ? undefined : inferredExternalShares?.[flow]) ??
+          settings.shares[flow] ??
+          settings.shares.local);
+    const profile = settings.stationProfiles?.[origin];
+    const purposeShares =
+      useProfiles && flow === "outbound"
+        ? (profile?.shares ??
+          defaultPurposeShares(profile?.primary, profile?.secondary))
+        : undefined;
+    for (const purpose of purposeShares
+      ? tripPurposes
+      : (["private"] as const)) {
+      const purposeVolume = purposeShares
+        ? (amount * purposeShares[purpose]) / 100
+        : amount;
+      if (byPurpose && purposeShares) byPurpose[purpose] += purposeVolume;
+      shares.forEach((share, i) =>
+        allocateWindow(
+          {
+            datasetId: project.datasetId!,
+            origin,
+            destination,
+            source: "estimated",
+            purpose,
+            kind: "outbound",
+            ...(direction && { arrivalDirection: direction }),
+            ...(trains &&
+              (flow === "inbound"
+                ? { boundaryOriginTrains: trains }
+                : { boundaryDestinationTrains: trains })),
+          },
+          (purposeVolume * share) / 100,
+          i,
+        ),
+      );
     }
   };
   // Reserve the explicitly counted external flows before distributing local boardings.
@@ -463,18 +644,88 @@ export function estimateLineDemand(project: Project, diaId: string) {
       );
       continue;
     }
-    for (const id of targets)
-      add(
-        origin,
-        id,
-        (amount * (alight.get(id)! * weight(id))) / attraction,
-        "local",
+    if (roles && byPurpose) {
+      profileVolumes(
+        settings.stationProfiles?.[origin],
+        amount,
+        targets.map((id) => ({
+          id,
+          base: alight.get(id)! * weight(id),
+          roles: roles.get(id)!,
+          direction: directionFor?.(origin, id),
+        })),
+        {
+          usesArrival,
+          manual: automaticTiming
+            ? undefined
+            : {
+                local: settings.shares.local,
+                up: arrival?.shares.up ?? [],
+                down: arrival?.shares.down ?? [],
+              },
+        },
+        (destination, volume, i, purpose, direction) => {
+          byPurpose[purpose] += volume;
+          destinations.set(
+            destination,
+            (destinations.get(destination) ?? 0) + volume,
+          );
+          allocateWindow(
+            {
+              datasetId: project.datasetId!,
+              origin,
+              destination,
+              source: "estimated",
+              purpose,
+              kind: "outbound",
+              ...(direction && { arrivalDirection: direction }),
+            },
+            volume,
+            i,
+          );
+        },
       );
+    } else {
+      for (const id of targets)
+        add(
+          origin,
+          id,
+          (amount * (alight.get(id)! * weight(id))) / attraction,
+          "local",
+        );
+    }
+  }
+  const smoothedArrivalShares = automaticTiming
+    ? byArrival
+    : arrival?.smooth
+      ? arrival.shares
+      : undefined;
+  if (smoothedArrivalShares && splitAutomatic.length) {
+    const hourly = {
+      up: hourlyDemandCurve(smoothedArrivalShares.up, true),
+      down: hourlyDemandCurve(smoothedArrivalShares.down, true),
+    };
+    for (const split of splitAutomatic) {
+      const weights = split.rows.map((row) =>
+        demandMass(
+          hourly[row.arrivalDirection!][arrivalHourIndex(row.start)],
+          row.start,
+          row.end,
+        ),
+      );
+      const mass = sum(weights);
+      if (mass)
+        split.rows.forEach((row, i) => {
+          row.passengers = (split.volume * weights[i]) / mass;
+        });
+    }
   }
   return {
     rows,
     byTime,
     byArrival,
+    byPurpose,
+    smoothedArrivalShares,
     external,
     destinations,
     dailyBoard,

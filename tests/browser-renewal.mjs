@@ -260,12 +260,62 @@ try {
     });
   const haze = page.locator("#diagram-enabled");
   await haze.check();
-  assert.ok((await lightBluePixels()) > 0, "low crowding draws light-blue haze");
+  assert.ok(
+    (await lightBluePixels()) > 0,
+    "low crowding draws light-blue haze",
+  );
   await haze.uncheck();
   assert.equal(await lightBluePixels(), 0);
   await page.getByRole("link", { name: "データ設定" }).click();
   await page.reload();
   assert.equal(await cap.inputValue(), "10");
+  const primary = page.getByLabel("緑丘ニュータウンの主属性", { exact: true });
+  const secondary = page.getByLabel("緑丘ニュータウンの副属性", {
+    exact: true,
+  });
+  const commute = page.getByLabel("緑丘ニュータウンの通勤の割合（%）", {
+    exact: true,
+  });
+  const school = page.getByLabel("緑丘ニュータウンの通学の割合（%）", {
+    exact: true,
+  });
+  const other = page.getByLabel("緑丘ニュータウンの非定期の割合（%）", {
+    exact: true,
+  });
+  await primary.selectOption("high-density-residential");
+  assert.equal(await commute.getAttribute("placeholder"), "55");
+  await secondary.selectOption("commercial");
+  assert.equal(await commute.getAttribute("placeholder"), "48.75");
+  await commute.fill("65");
+  await school.fill("20");
+  await other.fill("20");
+  const save = page.getByRole("button", { name: "設定を保存", exact: true });
+  await save.click();
+  await page.getByRole("alert").filter({ hasText: "割合を合計100%" }).waitFor();
+  await other.fill("15");
+  await timeBasis.selectOption("profile");
+  await cap.fill("");
+  await save.click();
+  await page.getByText("設定を保存しました", { exact: true }).waitFor();
+  await page.reload();
+  assert.equal(await timeBasis.inputValue(), "profile");
+  assert.equal(await primary.inputValue(), "high-density-residential");
+  assert.equal(await secondary.inputValue(), "commercial");
+  assert.equal(await commute.inputValue(), "65");
+  assert.equal(await school.inputValue(), "20");
+  assert.equal(await other.inputValue(), "15");
+  await page.getByRole("link", { name: "混雑ダイヤ図" }).click();
+  await page
+    .getByText(/駅から出発する需要の内訳.*通勤.*通学.*非定期/)
+    .waitFor();
+  await page.getByRole("button", { name: "混雑を計算" }).click();
+  await page.getByText("計算完了", { exact: true }).waitFor();
+  await page.locator("#diagram-train").selectOption("up-8");
+  assert.match(
+    await page.locator("#diagram-train-detail").innerText(),
+    /最大混雑率 [\d.]+%/,
+  );
+  await page.getByRole("link", { name: "データ設定" }).click();
   const fixture = await (
     await fetch(new URL("samples/basic-1.07.oud2", page.url()))
   ).arrayBuffer();

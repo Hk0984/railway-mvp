@@ -308,6 +308,17 @@ td input,
 td select {
   max-width: 14rem;
 }
+.station-purpose-table td:has(select) {
+  min-width: 9rem;
+}
+.station-purpose-table input {
+  max-width: 7rem;
+  font-variant-numeric: tabular-nums;
+}
+.station-purpose-table input::placeholder {
+  color: var(--muted);
+  opacity: 1;
+}
 td small,
 th small {
   display: block;

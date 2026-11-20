@@ -30,8 +30,10 @@ import {
   settingsBody,
   updateArrivalPreview,
   updateDemandTiming,
+  updateStationPurposeDefaults,
 } from "./renewal-settings";
 import { sampleProject } from "./sample";
+import { tripPurposeLabels, tripPurposes } from "./station-demand-profile";
 import { loadProject, saveProject } from "./storage";
 import { escapeHtml as e, numberText as n, parseClock } from "./ui-utils";
 import { validateWorkspace, type Workspace } from "./workspace";
@@ -84,6 +86,8 @@ const selection = () => ({
 const estimate = () => (demand ??= estimateLineDemand(project, diaId));
 const legacy = () =>
   !project.lineDemand?.destinationArrival?.enabled &&
+  !project.lineDemand?.stationProfileTiming &&
+  !Object.keys(project.lineDemand?.stationProfiles ?? {}).length &&
   !Object.keys(project.lineDemand?.counts ?? {}).length &&
   !project.lineDemand?.outside.length &&
   !!project.temporal?.slots.length;
@@ -167,6 +171,8 @@ function demandPreview() {
       dailyAlight,
       byTime,
       byArrival,
+      byPurpose,
+      smoothedArrivalShares,
       external,
       destinations,
       rejected,
@@ -205,7 +211,9 @@ function demandPreview() {
           ? "<p>以前保存した時間帯別ODを使用します。駅利用者数を登録すると新しい推計に切り替わります。</p>"
           : `
         ${timeSummary}
-        ${byArrival && project.lineDemand?.destinationArrival?.smooth ? '<p class="muted">時間内の到着需要を曲線で補間しています。</p>' : ""}
+        ${project.lineDemand?.stationProfileTiming ? '<p class="muted">駅の属性・利用目的から到着時刻を推計しています。</p>' : ""}
+        ${smoothedArrivalShares ? '<p class="muted">時間内の到着需要を曲線で補間しています。</p>' : ""}
+        ${byPurpose ? `<p>駅から出発する需要の内訳　${tripPurposes.map((purpose) => `${tripPurposeLabels[purpose]} ${n(byPurpose[purpose])}人`).join("・")}</p>` : ""}
         <p>路線外の配分対象　流入 ${n(external.inbound)}人・流出 ${n(external.outbound)}人</p>
         ${dominant ? `<p>主な行先　${dominant}</p>` : ""}
         ${Math.abs(dailyBoard - dailyAlight) > 0.01 ? `<p class="muted">内数調整後の駅別合計　乗車 ${n(dailyBoard)}人・降車 ${n(dailyAlight)}人。降車人数は行先の重みに使います。</p>` : ""}
@@ -432,11 +440,7 @@ function calculate() {
     compare: false,
     forDiagram: true,
     boardingLimitPercent: lineDemand?.boardingLimitPercent,
-    smoothedArrivalShares:
-      lineDemand?.destinationArrival?.enabled &&
-      lineDemand.destinationArrival.smooth
-        ? lineDemand.destinationArrival.shares
-        : undefined,
+    smoothedArrivalShares: plan.smoothedArrivalShares,
   });
   render();
 }
@@ -510,6 +514,10 @@ app.addEventListener("change", (event) => {
   const form = input.closest<HTMLFormElement>("#settings-form");
   if (!form) return;
   if (input.name === "demand-time-mode") updateDemandTiming(form);
+  if (input.hasAttribute("data-station-attribute"))
+    updateStationPurposeDefaults(
+      input.closest<HTMLElement>("[data-station-profile]")!,
+    );
   if (input.name.startsWith("override-")) {
     const fields = form.querySelector<HTMLElement>(
       `[data-override="${input.name.slice(9)}"]`,

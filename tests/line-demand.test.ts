@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { assignDemand, queryFor } from "../src/assignment";
 import { defaultAssignmentConfig } from "../src/assignment-model";
 import {
+  arrivalHourIndex,
   defaultLineDemand,
   estimateLineDemand,
   serviceDay,
@@ -29,6 +30,123 @@ function area(overrides: Partial<OutsideArea> = {}): OutsideArea {
 }
 
 describe("single-line demand", () => {
+  it("uses station attributes and purpose shares to distribute the same daily boardings by destination and hour", () => {
+    const p = sampleProject();
+    const d = (p.lineDemand = defaultLineDemand());
+    d.counts = {
+      s0: { board: 1000, alight: 100, weight: 1 },
+      s2: { board: 400, alight: 100, weight: 1 },
+      s4: { board: 0, alight: 100, weight: 1 },
+    };
+    d.stationProfileTiming = true;
+    d.stationProfiles = {
+      s0: {
+        primary: "high-density-residential",
+        shares: { commute: 60, school: 30, private: 10 },
+      },
+      s2: {
+        primary: "employment",
+        secondary: "nightlife",
+        shares: { commute: 100, school: 0, private: 0 },
+      },
+      s4: { primary: "education" },
+    };
+    const plan = estimateLineDemand(p, "weekday");
+    const fromHome = plan.rows.filter((row) => row.origin === "s0");
+    expect(total(fromHome)).toBeCloseTo(1000);
+    expect(
+      total(fromHome.filter((row) => row.purpose === "commute")),
+    ).toBeCloseTo(600);
+    expect(
+      total(fromHome.filter((row) => row.purpose === "school")),
+    ).toBeCloseTo(300);
+    expect(
+      total(fromHome.filter((row) => row.purpose === "private")),
+    ).toBeCloseTo(100);
+    expect(total(plan.rows)).toBeCloseTo(1400);
+    const morning = (purpose: string, destination: string) =>
+      total(
+        fromHome.filter(
+          (row) =>
+            row.purpose === purpose &&
+            row.destination === destination &&
+            arrivalHourIndex(row.start) === 8,
+        ),
+      );
+    expect(morning("commute", "s2")).toBeGreaterThan(morning("commute", "s4"));
+    expect(morning("school", "s4")).toBeGreaterThan(morning("school", "s2"));
+
+    const toHome = plan.rows.filter(
+      (row) => row.origin === "s2" && row.destination === "s0",
+    );
+    expect(
+      total(toHome.filter((row) => arrivalHourIndex(row.start) === 18)),
+    ).toBeGreaterThan(
+      total(toHome.filter((row) => arrivalHourIndex(row.start) === 8)),
+    );
+    const nightDemand = (rows: typeof plan.rows) =>
+      total(
+        rows.filter(
+          (row) =>
+            row.origin === "s0" &&
+            row.destination === "s2" &&
+            row.purpose === "private" &&
+            arrivalHourIndex(row.start) === 21,
+        ),
+      );
+    delete d.stationProfiles.s2.secondary;
+    expect(nightDemand(plan.rows)).toBeGreaterThan(
+      nightDemand(estimateLineDemand(p, "weekday").rows),
+    );
+    expect(plan.smoothedArrivalShares).toEqual(plan.byArrival);
+  });
+
+  it("preserves manually entered hourly percentages and origin purpose shares, including reserved external flow", () => {
+    const p = sampleProject();
+    const d = (p.lineDemand = defaultLineDemand(true));
+    d.stationProfiles = {
+      s2: {
+        primary: "education",
+        shares: { commute: 20, school: 70, private: 10 },
+      },
+    };
+    d.outside = [area({ included: false, inbound: 0, outbound: 500 })];
+    const up = Array<number>(24).fill(0),
+      down = Array<number>(24).fill(0);
+    up[4] = 25;
+    up[18] = 75;
+    down[8] = 60;
+    down[14] = 40;
+    d.destinationArrival = {
+      enabled: true,
+      smooth: true,
+      shares: { up, down },
+    };
+    const plan = estimateLineDemand(p, "weekday");
+    expect(plan.external.outbound).toBeCloseTo(500);
+    expect(total(plan.rows)).toBeCloseTo(plan.dailyBoard);
+    for (const dir of ["up", "down"] as const) {
+      const values = plan.byArrival![dir];
+      const amount = values.reduce((a, b) => a + b, 0);
+      expect(amount).toBeGreaterThan(0);
+      values.forEach((value, i) =>
+        expect((value / amount) * 100).toBeCloseTo(
+          d.destinationArrival!.shares[dir][i],
+        ),
+      );
+    }
+    const atSchool = plan.rows.filter((row) => row.origin === "s2");
+    expect(total(atSchool)).toBeCloseTo(d.counts.s2.board);
+    expect(
+      total(atSchool.filter((row) => row.purpose === "school")),
+    ).toBeCloseTo(d.counts.s2.board * 0.7);
+    expect(plan.smoothedArrivalShares).toEqual({ up, down });
+    d.stationProfiles.s2.shares!.private = 20;
+    expect(() => validateProject(p)).toThrow(
+      "通勤・通学・非定期の割合を合計100%",
+    );
+  });
+
   it("splits the four periods without dropping the after-midnight part", () => {
     const p = sampleProject();
     p.lineDemand = defaultLineDemand();

@@ -18,6 +18,15 @@ import {
   type OutsideArea,
 } from "./line-demand";
 import type { Project, Timetable } from "./model";
+import {
+  defaultPurposeShares,
+  stationAttributes,
+  tripPurposeLabels,
+  tripPurposes,
+  type PurposeShares,
+  type StationAttribute,
+  type StationDemandProfile,
+} from "./station-demand-profile";
 import { escapeHtml as e, numberText as n } from "./ui-utils";
 
 export function options(items: { id: string; name: string }[], value: string) {
@@ -44,6 +53,42 @@ function shareFields(shares: number[], prefix: string) {
         `<label><span>${period.label}</span><small>${period.note}</small><span class="field-unit">${num(prefix + i, shares[i], period.label + "の割合")}<span>%</span></span></label>`,
     )
     .join("")}</div>`;
+}
+
+function stationProfileRow(
+  name: string,
+  i: number,
+  profile?: StationDemandProfile,
+) {
+  const primary = profile?.primary,
+    secondary = profile?.secondary;
+  const attributes = (
+    role: "primary" | "secondary",
+    value?: StationAttribute,
+  ) =>
+    `<select name="station-${role}-${i}" data-station-attribute="${role}" aria-label="${e(name + (role === "primary" ? "の主属性" : "の副属性"))}"><option value="">${role === "primary" ? "未設定" : "なし"}</option>${options(stationAttributes, value ?? "")}</select>`;
+  const automatic = defaultPurposeShares(primary, secondary);
+  const purposes = tripPurposes
+    .map(
+      (purpose) =>
+        `<td><input type="number" min="0" max="100" step="any" name="station-${purpose}-${i}" data-station-purpose="${purpose}" aria-label="${e(name + "の" + tripPurposeLabels[purpose] + "の割合（%）")}" value="${profile?.shares?.[purpose] ?? ""}" placeholder="${automatic[purpose]}"></td>`,
+    )
+    .join("");
+  return `<tr data-station-profile><th scope="row">${e(name)}</th><td>${attributes("primary", primary)}</td><td>${attributes("secondary", secondary)}</td>${purposes}</tr>`;
+}
+
+export function updateStationPurposeDefaults(row: HTMLElement) {
+  const attribute = (role: "primary" | "secondary") =>
+    (row.querySelector<HTMLSelectElement>(`[data-station-attribute="${role}"]`)!
+      .value || undefined) as StationAttribute | undefined;
+  const shares = defaultPurposeShares(
+    attribute("primary"),
+    attribute("secondary"),
+  );
+  for (const purpose of tripPurposes)
+    row.querySelector<HTMLInputElement>(
+      `[data-station-purpose="${purpose}"]`,
+    )!.placeholder = String(shares[purpose]);
 }
 
 function destinationArrivalFields(project: Project, demand: LineDemand) {
@@ -151,6 +196,11 @@ export function areaCard(
 
 export function settingsBody(p: Project, dia: Timetable, draft?: LineDemand) {
   const d = draft ?? p.lineDemand ?? defaultLineDemand();
+  const timing = d.stationProfileTiming
+    ? "profile"
+    : d.destinationArrival?.enabled
+      ? "arrival"
+      : "boarding";
   return `
   <section class="surface timetable-settings">
     <div class="section-heading"><div><h2>ダイヤデータ</h2><p class="muted">OuDia2ndの時刻表または保存した設定を開きます。</p></div></div>
@@ -174,14 +224,20 @@ export function settingsBody(p: Project, dia: Timetable, draft?: LineDemand) {
         .join("")}</tbody></table></div>
     </section>
     <section class="surface">
+      <div class="section-heading"><div><h2>駅の属性・利用目的</h2><p class="muted">属性から目的別の行き先を推計します。副属性の反映は25%です。割合をすべて空欄にすると欄に表示された初期値を使います。個別に指定する場合は3項目を合計100%にしてください。</p></div></div>
+      <div class="table-scroll"><table class="station-purpose-table"><thead><tr><th scope="col">駅</th><th scope="col">主属性</th><th scope="col">副属性</th>${tripPurposes.map((purpose) => `<th scope="col">${tripPurposeLabels[purpose]}（%）</th>`).join("")}</tr></thead>
+      <tbody>${p.stations.map((s, i) => stationProfileRow(s.name, i, d.stationProfiles?.[s.id])).join("")}</tbody></table></div>
+    </section>
+    <section class="surface">
       <div class="section-heading"><div><h2>時間帯の振り分け</h2></div></div>
       <div class="fields single-field">
         <label>時間帯の基準<select name="demand-time-mode" aria-label="時間帯の基準">
           <option value="boarding">出発駅に着く時間帯（4枠）</option>
-          <option value="arrival" ${d.destinationArrival?.enabled ? "selected" : ""}>目的地に着く時刻（上下別・1時間ごと）</option>
+          <option value="arrival" ${timing === "arrival" ? "selected" : ""}>目的地に着く時刻（上下別・1時間ごと）</option>
+          <option value="profile" ${timing === "profile" ? "selected" : ""}>駅の属性・利用目的から到着時刻を推計</option>
         </select></label>
       </div>
-      <fieldset class="demand-time-fields" data-demand-timing="boarding" ${d.destinationArrival?.enabled ? "hidden disabled" : ""}>
+      <fieldset class="demand-time-fields" data-demand-timing="boarding" ${timing !== "boarding" ? "hidden disabled" : ""}>
       <p class="muted">合計100%。時間帯内は一様に出発駅へ到着すると仮定します。</p>
       ${shareFields(d.shares.local, "local")}
       <details ${d.shares.inbound || d.shares.outbound ? "open" : ""}><summary>流入・流出だけ別の割合を使う</summary>
@@ -194,8 +250,11 @@ export function settingsBody(p: Project, dia: Timetable, draft?: LineDemand) {
           .join("")}
       </details>
       </fieldset>
-      <fieldset class="demand-time-fields" data-demand-timing="arrival" ${d.destinationArrival?.enabled ? "" : "hidden disabled"}>
+      <fieldset class="demand-time-fields" data-demand-timing="arrival" ${timing === "arrival" ? "" : "hidden disabled"}>
         ${destinationArrivalFields(p, d)}
+      </fieldset>
+      <fieldset class="demand-time-fields" data-demand-timing="profile" ${timing === "profile" ? "" : "hidden disabled"}>
+        <p class="muted">通勤・通学の朝と帰宅の時間帯、非定期の日中・夜間などの傾向から、到着需要を1時間ごとに推計します。路線外方面の時刻には、保存済みの4枠の割合を使います。</p>
       </fieldset>
     </section>
     <section class="surface">
@@ -253,11 +312,13 @@ export function readDemand(
   const fields = new FormData(form);
   const str = (key: string) => String(fields.get(key) ?? "");
   const base = p.lineDemand ?? defaultLineDemand();
-  const byArrival = str("demand-time-mode") === "arrival";
-  const shares: LineDemand["shares"] = byArrival
-    ? base.shares
-    : { local: periods.map((_, i) => Number(str("local" + i))) };
-  if (!byArrival)
+  const timing = str("demand-time-mode");
+  const byArrival = timing === "arrival";
+  const shares: LineDemand["shares"] =
+    timing === "boarding"
+      ? { local: periods.map((_, i) => Number(str("local" + i))) }
+      : base.shares;
+  if (timing === "boarding")
     for (const flow of ["inbound", "outbound"] as const)
       if (fields.has("override-" + flow))
         shares[flow] = periods.map((_, i) => Number(str(flow + i)));
@@ -326,9 +387,35 @@ export function readDemand(
         : [],
     ),
   );
+  const stationProfiles = Object.fromEntries(
+    p.stations.flatMap((s, i) => {
+      const primary = str(`station-primary-${i}`) as StationAttribute | "";
+      const secondary = str(`station-secondary-${i}`) as StationAttribute | "";
+      const entries = tripPurposes.map(
+        (purpose) => [purpose, str(`station-${purpose}-${i}`)] as const,
+      );
+      const shares = entries.some(([, value]) => value !== "")
+        ? (Object.fromEntries(
+            entries.map(([purpose, value]) => [
+              purpose,
+              value === "" ? NaN : Number(value),
+            ]),
+          ) as PurposeShares)
+        : undefined;
+      if (!primary && !secondary && !shares) return [];
+      const profile: StationDemandProfile = {
+        ...(primary && { primary }),
+        ...(secondary && { secondary }),
+        ...(shares && { shares }),
+      };
+      return [[s.id, profile] as const];
+    }),
+  );
   const limit = str("boarding-limit-percent").trim();
   return {
     counts,
+    ...(Object.keys(stationProfiles).length > 0 && { stationProfiles }),
+    ...(timing === "profile" && { stationProfileTiming: true }),
     shares,
     outside,
     ...(limit !== "" && { boardingLimitPercent: Number(limit) }),
