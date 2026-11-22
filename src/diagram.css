@@ -67,6 +67,62 @@
 .diagram-details p {
   margin: 0.25rem 0;
 }
+.diagram-interior {
+  margin: 0.85rem 0 0;
+  padding-top: 0.65rem;
+  border-top: 1px solid #d7e2dd;
+}
+.diagram-interior figcaption,
+.diagram-interior-key {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.8rem;
+}
+.diagram-interior svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-width: 680px;
+  margin-top: 0.2rem;
+}
+.diagram-interior-shell {
+  fill: #fff;
+  stroke: #8da4a5;
+  stroke-width: 2;
+}
+.diagram-interior-door {
+  fill: #d7e6eb;
+  stroke: #8da4a5;
+}
+.diagram-interior-seat {
+  fill: #d2e5dd;
+  stroke: #a6c2b7;
+}
+.diagram-interior-seated {
+  --interior-person: #0e7060;
+}
+.diagram-interior-standing {
+  --interior-person: #365a74;
+}
+.diagram-interior svg circle {
+  fill: var(--interior-person);
+}
+.diagram-interior-key {
+  font-size: 0.82rem;
+}
+.diagram-interior-key span {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+.diagram-interior-key span::before {
+  content: "";
+  width: 0.65rem;
+  height: 0.65rem;
+  border-radius: 50%;
+  background: var(--interior-person);
+}
 .diagram-train-chart,
 .diagram-boarding-chart {
   margin-top: 0.65rem;

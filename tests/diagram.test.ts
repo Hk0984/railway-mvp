@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { assignDemand } from "../src/assignment";
 import { defaultAssignmentConfig } from "../src/assignment-model";
+import { trainInterior } from "../src/diagram-interior";
 import {
   crowdingBand,
   crowdingLimits,
@@ -12,6 +13,19 @@ import { parseOud2 } from "../src/oud2";
 import { readFileSync } from "node:fs";
 
 describe("列車ダイヤ図", () => {
+  it("shows seated and standing density and preserves the value beyond the drawing scale", () => {
+    expect(trainInterior(null, 200)).toBe("");
+    expect(trainInterior(0, 0)).toContain("座席に0点、通路に0点");
+    expect(trainInterior(28.7, 229.7)).toContain("座席に11点、通路に0点");
+    expect(trainInterior(100, 800)).toContain("座席に16点、通路に24点");
+    const crowded = trainInterior(230, 1840, 8);
+    expect(crowded).toContain("座席に16点、通路に76点");
+    expect(crowded).toContain("1両あたり平均 230人");
+    const beyondLimit = trainInterior(410, 3280);
+    expect(beyondLimit).toContain("混雑率410%。座席に16点、通路に104点");
+    expect(beyondLimit).toContain("300%相当まで点で表示");
+  });
+
   it("includes threshold endpoints and never assigns a band to missing values", () => {
     expect(
       [

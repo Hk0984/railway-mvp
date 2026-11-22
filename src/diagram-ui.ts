@@ -3,6 +3,7 @@ import "./diagram.css";
 import { clock } from "./analysis";
 import type { AssignmentResult, DiagramAssignment } from "./assignment-model";
 import { capacitySpec } from "./capacity-model";
+import { trainInterior } from "./diagram-interior";
 import { stationBoardingChart, trainChart } from "./diagram-train-chart";
 import { assignmentTransfers } from "./diagram-transfers";
 import {
@@ -441,7 +442,8 @@ export function mountDiagram(
     detail.innerHTML = `<h3>区間情報</h3><p><strong>${e(train.number || train.id)}</strong> ／ ${e(route(segment))} ／ ${clock(segment.start)}–${clock(segment.end)}</p>
       <p>推定乗車人数 ${people(segment.passengers)} ／ 輸送力 ${people(capacity)}${capacity !== null && spec?.kind === "transport" ? "（" + e(spec.basis) + "）" : ""}</p>
       <p>混雑率 ${percent(segment.percent)} ／ ${status}</p>
-      ${segment.untimedPasses ? `<p class="muted">時刻の記載がない通過駅　${segment.untimedPasses.map((s) => e(station(s.stationId))).join("、")}</p>` : ""}`;
+      ${segment.untimedPasses ? `<p class="muted">時刻の記載がない通過駅　${segment.untimedPasses.map((s) => e(station(s.stationId))).join("、")}</p>` : ""}
+      ${trainInterior(segment.percent, segment.passengers, spec?.carCount)}`;
   }
 
   function selectTrain(id: string, segment?: DiagramSegment) {

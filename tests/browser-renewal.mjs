@@ -88,6 +88,14 @@ try {
     await page.locator("#diagram-segment-detail").innerText(),
     /混雑率 [0-9.]+%/,
   );
+  const segmentDetail = page.locator("#diagram-segment-detail");
+  const interior = segmentDetail.getByRole("img", { name: /車内の模式図/ });
+  await interior.waitFor();
+  assert.ok((await interior.locator("circle").count()) > 0);
+  await page.locator("#diagram-section").selectOption("1");
+  assert.match(await segmentDetail.innerText(), /停車中/);
+  assert.equal(await interior.count(), 0);
+  await page.locator("#diagram-section").selectOption("0");
   const canvas = page.locator(".diagram-scroll canvas");
   const pixels = () =>
     canvas.evaluate(async (el) => {
@@ -252,6 +260,15 @@ try {
   await page.locator("#diagram-train").selectOption("up-15");
   const peak = await page.locator("#diagram-train-detail").innerText();
   assert.match(peak, /最大混雑率 10%/);
+  await page.locator("#diagram-section").selectOption("0");
+  const seated = await interior
+    .locator("g.diagram-interior-seated circle")
+    .count();
+  assert.ok(seated > 0 && seated <= 4);
+  assert.equal(
+    await interior.locator("g.diagram-interior-standing circle").count(),
+    0,
+  );
   await zoom.selectOption("160");
   const lightBluePixels = () =>
     canvas.evaluate(async (el) => {
@@ -421,6 +438,7 @@ try {
     await page.locator("#diagram-segment-detail").innerText(),
     /23:50–24:10[\s\S]*未算出/,
   );
+  assert.equal(await interior.count(), 0);
   await displayDirection.selectOption("down");
   await page
     .getByText("選択した表示条件に該当する列車がありません。")
