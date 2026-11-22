@@ -5,6 +5,7 @@ import {
 } from "./assignment";
 import { cachedProfile } from "./assignment-cache";
 import { transportCapacity, capacitySpec } from "./capacity-model";
+import { minimumTransferGainSeconds } from "./diagram-continuation";
 import { allocateVolume } from "./temporal-demand";
 import {
   stationKey,
@@ -360,7 +361,7 @@ export function simulateCapacity(
       return;
     }
     if (limit) {
-      const next = candidates.reduce((best, journey) =>
+      const first = candidates.reduce((best, journey) =>
         (journey.departure - best.departure ||
           journey.arrival - best.arrival ||
           journey.transferCount - best.transferCount ||
@@ -368,6 +369,18 @@ export function simulateCapacity(
           ? journey
           : best,
       );
+      const fastest = candidates.reduce((best, journey) =>
+        (journey.arrival - best.arrival ||
+          journey.transferCount - best.transferCount ||
+          journey.departure - best.departure ||
+          journey.id.localeCompare(best.id)) < 0
+          ? journey
+          : best,
+      );
+      const next =
+        first.arrival - fastest.arrival >= minimumTransferGainSeconds
+          ? fastest
+          : first;
       p.plan = next.legs.slice();
       queue(p);
       return;

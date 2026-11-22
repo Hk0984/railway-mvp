@@ -43,6 +43,7 @@ describe("single-line demand", () => {
       counts: counts(120, 120),
       shares: { local: [100, 0, 0, 0] },
       boardingLimitPercent: 150,
+      minimumTransferSeconds: 120,
     };
     expect(lineDemandForDay(p, "friday")).toEqual(p.lineDemand);
     expect(lineDemandForDay(p, "holiday")).toEqual(p.lineDemand);
@@ -67,6 +68,7 @@ describe("single-line demand", () => {
         ...lineDemandForDay(p, "holiday"),
         counts: counts(80, 80),
         boardingLimitPercent: 170,
+        minimumTransferSeconds: 75,
         destinationArrival: {
           enabled: true,
           shares: { up: hourly, down: hourly },
@@ -91,6 +93,12 @@ describe("single-line demand", () => {
     expect(lineDemandForDay(reopened, "friday").boardingLimitPercent).toBe(170);
     expect(lineDemandForDay(reopened, "weekday").boardingLimitPercent).toBe(
       170,
+    );
+    expect(lineDemandForDay(reopened, "friday").minimumTransferSeconds).toBe(
+      75,
+    );
+    expect(lineDemandForDay(reopened, "weekday").minimumTransferSeconds).toBe(
+      75,
     );
   });
 

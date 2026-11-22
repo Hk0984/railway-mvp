@@ -66,6 +66,9 @@ try {
   const section = page.locator("#diagram-section");
   const localCars = page.getByLabel("普通の編成両数", { exact: true });
   const rapidCars = page.getByLabel("快速の編成両数", { exact: true });
+  const transferSeconds = page.getByLabel("最低乗換時間（秒）", {
+    exact: true,
+  });
   await page.getByRole("button", { name: "混雑を計算" }).click();
   await page.getByText("計算完了", { exact: true }).waitFor();
   await diagramTrain.selectOption("down-8");
@@ -74,6 +77,8 @@ try {
   await segmentDetail.getByRole("link", { name: "データ設定" }).click();
   await localCars.fill("8");
   await rapidCars.fill("6");
+  assert.equal(await transferSeconds.inputValue(), "60");
+  await transferSeconds.fill("90");
   await page.getByRole("button", { name: "設定を保存", exact: true }).click();
   await page.getByText("設定を保存しました", { exact: true }).waitFor();
   await page.getByRole("link", { name: "混雑ダイヤ図" }).click();
@@ -175,6 +180,7 @@ try {
   await page.getByRole("link", { name: "データ設定" }).click();
   assert.equal(await localCars.inputValue(), "8");
   assert.equal(await rapidCars.inputValue(), "6");
+  assert.equal(await transferSeconds.inputValue(), "90");
   await page.getByRole("button", { name: "方面を追加" }).click();
   await page.getByPlaceholder("都心方面").fill("都心方面");
   await page.getByLabel("1日の流入", { exact: true }).fill("300");

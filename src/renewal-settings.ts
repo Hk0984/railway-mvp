@@ -12,9 +12,10 @@ import {
   arrivalHourCount,
   arrivalHours,
   boundaryTrains,
-  initialArrivalShares,
+  defaultLineTransferSeconds,
   demandDayLabels,
   hasSeparateDemand,
+  initialArrivalShares,
   lineDemandForDay,
   periods,
   type LineDemand,
@@ -289,9 +290,11 @@ export function settingsBody(p: Project, dia: Timetable, draft?: LineDemand) {
     </section>
     <section class="surface">
       <div class="section-heading"><div><h2>営業区分・輸送定員</h2><p class="muted">定員は1編成あたりの人数です。車内図では種別の編成両数を使い、列車別の編成両数があればそちらを優先します。</p></div><button type="button" data-action="all-passenger">未確認の種別を営業に設定</button></div>
-      <div class="fields single-field">
+      <div class="fields">
+        <label>最低乗換時間（秒）<input name="minimum-transfer-seconds" type="number" min="1" step="1" required value="${d.minimumTransferSeconds ?? defaultLineTransferSeconds}" aria-describedby="minimum-transfer-hint"></label>
         <label>乗車上限の混雑率（%）<input name="boarding-limit-percent" type="number" min="0" step="any" value="${d.boardingLimitPercent ?? ""}" placeholder="例：150" aria-describedby="boarding-limit-hint"></label>
       </div>
+      <p id="minimum-transfer-hint" class="muted">乗換案内・混雑推計の全日区分に共通です。駅構内の移動に時間がかかる場合は値を大きくしてください。</p>
       <p id="boarding-limit-hint" class="muted">乗車上限は全日区分で共通です。空欄なら上限なし。指定の混雑率に達すると、乗り切れない利用者は目的地へ行ける後続便を待ちます。</p>
       <div class="table-scroll"><table><thead><tr><th scope="col">列車種別</th><th scope="col">営業区分</th><th scope="col">輸送定員（人）</th><th scope="col">編成両数</th></tr></thead>
       <tbody>${p.types
@@ -445,6 +448,7 @@ export function readDemand(
     ...(timing === "profile" && { stationProfileTiming: true }),
     shares,
     outside,
+    minimumTransferSeconds: Number(str("minimum-transfer-seconds")),
     ...(limit !== "" && { boardingLimitPercent: Number(limit) }),
     ...(destinationArrival && { destinationArrival }),
   };

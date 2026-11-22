@@ -80,7 +80,71 @@ type PlannedArrival = (
   journey?: { id: string; legs: JourneyLeg[] },
 ) => void;
 
-/** Assign each part of the hourly demand curve to the closest arrival in that hour. */
+type ArrivalChoice = { journey: Journey; arrives: number; burden: number };
+const arrivalTimeWeight = 2;
+
+function arrivalChoices(offerings: Journey[], mirror: number) {
+  const boardingKey = (journey: Journey) => {
+    // In the reversed timetable the last leg contains the forward boarding stop.
+    const leg = journey.legs.at(-1)!;
+    return JSON.stringify([leg.trainId, leg.alightIndex]);
+  };
+  const transferArrivals = new Map<string, number>();
+  for (const journey of offerings) {
+    if (!journey.transferCount) continue;
+    const key = boardingKey(journey);
+    const arrives = mirror - journey.departure;
+    transferArrivals.set(
+      key,
+      Math.min(arrives, transferArrivals.get(key) ?? Infinity),
+    );
+  }
+  const options = offerings
+    .map((journey): ArrivalChoice => ({
+      journey,
+      arrives: mirror - journey.departure,
+      // Two minutes of journey burden trade against one minute off the target time.
+      burden:
+        (journey.elapsedSeconds +
+          journey.transferCount * minimumTransferGainSeconds) /
+        arrivalTimeWeight,
+    }))
+    .filter(
+      ({ journey, arrives }) =>
+        journey.transferCount > 0 ||
+        arrives - (transferArrivals.get(boardingKey(journey)) ?? Infinity) <
+          minimumTransferGainSeconds,
+    )
+    .sort(
+      (a, b) =>
+        a.arrives - b.arrives ||
+        a.burden - b.burden ||
+        a.journey.transferCount - b.journey.transferCount ||
+        a.journey.id.localeCompare(b.journey.id),
+    );
+
+  // For |target - arrival| + burden, skip arrivals that can never be preferred.
+  const choices: ArrivalChoice[] = [];
+  for (const option of options) {
+    let previous = choices.at(-1);
+    if (previous?.arrives === option.arrives) continue;
+    while (
+      previous &&
+      previous.burden - option.burden >= option.arrives - previous.arrives
+    ) {
+      choices.pop();
+      previous = choices.at(-1);
+    }
+    if (
+      !previous ||
+      option.burden - previous.burden < option.arrives - previous.arrives
+    )
+      choices.push(option);
+  }
+  return choices;
+}
+
+/** Assign each part of the hourly demand curve by arrival fit and journey duration. */
 export function assignDestinationArrivals(
   index: RoutingIndex,
   rows: AssignmentDemand[],
@@ -105,7 +169,7 @@ export function assignDestinationArrivals(
     for (const stop of visits)
       mirror = Math.max(mirror, stop.arrival ?? 0, stop.departure ?? 0);
   const reversed = reverseRoutingIndex(index, mirror);
-  const profile = lineAssignmentProfile(reversed);
+  const profile = lineAssignmentProfile(reversed, { retainThrough: true });
   const curves = smoothedShares && {
     up: hourlyDemandCurve(smoothedShares.up, true),
     down: hourlyDemandCurve(smoothedShares.down, true),
@@ -181,7 +245,7 @@ export function assignDestinationArrivals(
 
     // An earliest-arrival search on reversed trips gives a latest-departure
     // itinerary for each usable destination arrival in the forward timetable.
-    const byWindow = new Map<string, { journey: Journey; arrives: number }[]>();
+    const byWindow = new Map<string, ArrivalChoice[]>();
     group.forEach((demand) => {
       const { start, end, passengers } = demand;
       const key = JSON.stringify([start, end]);
@@ -223,24 +287,11 @@ export function assignDestinationArrivals(
               );
             },
           },
-        )
-          .filter(
-            (j) =>
-              j.departure > after &&
-              j.elapsedSeconds <= config.maxJourneySeconds,
-          )
-          .sort(
-            (a, b) =>
-              b.departure - a.departure ||
-              a.arrival - b.arrival ||
-              a.transferCount - b.transferCount ||
-              a.id.localeCompare(b.id),
-          );
-        choices = offerings
-          .filter(
-            (j, i) => i === 0 || j.departure !== offerings[i - 1].departure,
-          )
-          .map((journey) => ({ journey, arrives: mirror - journey.departure }));
+        ).filter(
+          (j) =>
+            j.departure > after && j.elapsedSeconds <= config.maxJourneySeconds,
+        );
+        choices = arrivalChoices(offerings, mirror);
         byWindow.set(key, choices);
       }
       if (!choices.length) {
@@ -251,9 +302,11 @@ export function assignDestinationArrivals(
       const curve = curves?.[direction][arrivalHourIndex(start)];
       const mass = curve ? demandMass(curve, start, end) : 0;
       let previous = start;
-      choices.forEach(({ journey, arrives }, i) => {
-        const until =
-          i + 1 < choices.length ? (arrives + choices[i + 1].arrives) / 2 : end;
+      choices.forEach(({ journey, arrives, burden }, i) => {
+        const next = choices[i + 1];
+        const until = next
+          ? (arrives + next.arrives + next.burden - burden) / 2
+          : end;
         const fraction =
           curve && mass > 0
             ? demandMass(curve, previous, until) / mass

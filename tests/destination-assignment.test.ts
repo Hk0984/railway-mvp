@@ -14,6 +14,7 @@ import {
   arrivalHourIndex,
   arrivalHours,
   defaultLineDemand,
+  defaultLineTransferSeconds,
   estimateLineDemand,
   initialArrivalShares,
   serviceDay,
@@ -108,7 +109,8 @@ it.each([22, 32])(
 it("keeps a direct local candidate after rejecting a needless transfer to it", () => {
   const { index, config, row } = continuationExample(at(8, 22), true);
   const result = assignDestinationArrivals(index, [row], config);
-  expect(result.loads.map((load) => load.totalBoardings)).toEqual([26, 34]);
+  expect(result.loads[0].totalBoardings).toBeCloseTo(29.25);
+  expect(result.loads[1].totalBoardings).toBeCloseTo(30.75);
   expect(result.totals).toMatchObject({
     assigned: 60,
     unassigned: 0,
@@ -131,7 +133,9 @@ it("finds an earlier feeder that needs the transfer after rejecting a needless t
     { datasetId: row.datasetId, project, timetableId: dia.id },
   ]);
   const result = assignDestinationArrivals(index, [row], config);
-  expect(result.loads.map((load) => load.totalBoardings)).toEqual([26, 34, 34]);
+  expect(result.loads.map((load) => load.totalBoardings)).toEqual([
+    29.75, 30.25, 30.25,
+  ]);
   expect(result.totals).toMatchObject({ assigned: 60, unassigned: 0 });
 });
 
@@ -144,7 +148,15 @@ it("permits a three-minute saving or a transfer needed to reach the requested wi
   );
   expect(saving.loads.map((load) => load.totalBoardings)).toEqual([60, 60]);
   const bothAvailable = assignDestinationArrivals(index, [row], config);
-  expect(bothAvailable.loads[1].totalBoardings).toBeGreaterThan(0);
+  expect(bothAvailable.loads.map((load) => load.totalBoardings)).toEqual([
+    60, 60,
+  ]);
+  const laterWindow = assignDestinationArrivals(
+    index,
+    [{ ...row, start: at(8, 31) }],
+    config,
+  );
+  expect(laterWindow.loads.map((load) => load.totalBoardings)).toEqual([60, 0]);
   const earlier = continuationExample(at(8, 22));
   const desired = assignDestinationArrivals(
     earlier.index,
@@ -156,6 +168,30 @@ it("permits a three-minute saving or a transfer needed to reach the requested wi
     unassigned: 0,
     boardingEvents: 120,
   });
+});
+
+it("uses the exact minimum connection time when both routes reach the requested hour", () => {
+  const { project, config, row } = continuationExample(at(8, 45));
+  const dia = project.timetables[0];
+  const transferStop = dia.trains[1].stops[0];
+  transferStop.arrival = at(8, 10);
+  transferStop.departure = at(8, 11);
+  const index = buildRoutingIndex([
+    { datasetId: row.datasetId, project, timetableId: dia.id },
+  ]);
+  for (const seconds of [
+    defaultLineTransferSeconds,
+    defaultLineTransferSeconds + 1,
+  ]) {
+    const result = assignDestinationArrivals(index, [row], {
+      ...config,
+      minimumTransferSeconds: seconds,
+    });
+    expect(result.loads.map((load) => load.totalBoardings)).toEqual([
+      60,
+      seconds === 60 ? 60 : 0,
+    ]);
+  }
 });
 
 it("honors directional arrival hours, an exact hour boundary, and a transfer across midnight", () => {

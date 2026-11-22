@@ -54,51 +54,58 @@ function setup() {
 }
 
 describe("乗車上限", () => {
-  it("limits boarding at 150% of vehicle capacity, frees space after alighting and rolls excess onto the next train", () => {
-    const { dia, config, train, demand, index } = setup();
-    dia.trains = [
-      train("先発", [
-        { stationId: "s0", status: "stop", departure: at(8, 10) },
-        {
-          stationId: "s2",
-          status: "stop",
-          arrival: at(8, 20),
-          departure: at(8, 22),
-        },
-        { stationId: "s4", status: "stop", arrival: at(8, 35) },
-      ]),
-      train("後続", [
-        { stationId: "s0", status: "stop", departure: at(8, 40) },
-        { stationId: "s4", status: "stop", arrival: at(9, 5) },
-      ]),
-      train("後発速達", [
-        { stationId: "s0", status: "stop", departure: at(8, 45) },
-        { stationId: "s4", status: "stop", arrival: at(9) },
-      ]),
-    ];
-    const result = assignDiagramCapacity(
-      index(),
-      [
-        demand("s0", "s2", at(8), at(8, 5), 80),
-        demand("s0", "s4", at(8), at(8, 5), 120),
-        demand("s2", "s4", at(8, 12), at(8, 16), 60),
-      ],
-      config,
-      150,
-    );
-    expect(result.loads.map((l) => l.segmentLoads)).toEqual([
-      [150, 130],
-      [50],
-      [0],
-    ]);
-    expect(result.loads.map((l) => l.peakOccupancy)).toEqual([1.5, 0.5, 0]);
-    expect(result.totals).toMatchObject({ assigned: 260, unassigned: 0 });
-    expect(result.diagnostics.boardingLimit).toMatchObject({
-      percent: 150,
-      denied: 50,
-      waiting: 0,
-    });
-  });
+  it.each([2, 3, 5])(
+    "limits boarding, frees space on alighting, and accounts for a %i-minute gain from a later train",
+    (gain) => {
+      const { dia, config, train, demand, index } = setup();
+      dia.trains = [
+        train("先発", [
+          { stationId: "s0", status: "stop", departure: at(8, 10) },
+          {
+            stationId: "s2",
+            status: "stop",
+            arrival: at(8, 20),
+            departure: at(8, 22),
+          },
+          { stationId: "s4", status: "stop", arrival: at(8, 35) },
+        ]),
+        train("後続", [
+          { stationId: "s0", status: "stop", departure: at(8, 40) },
+          { stationId: "s4", status: "stop", arrival: at(9, 5) },
+        ]),
+        train("後発速達", [
+          { stationId: "s0", status: "stop", departure: at(8, 45) },
+          { stationId: "s4", status: "stop", arrival: at(9, 5 - gain) },
+        ]),
+      ];
+      const result = assignDiagramCapacity(
+        index(),
+        [
+          demand("s0", "s2", at(8), at(8, 5), 80),
+          demand("s0", "s4", at(8), at(8, 5), 120),
+          demand("s2", "s4", at(8, 12), at(8, 16), 60),
+        ],
+        config,
+        150,
+      );
+      expect(result.loads.map((l) => l.segmentLoads)).toEqual([
+        [150, 130],
+        [gain < 3 ? 50 : 0],
+        [gain < 3 ? 0 : 50],
+      ]);
+      expect(result.loads.map((l) => l.peakOccupancy)).toEqual([
+        1.5,
+        gain < 3 ? 0.5 : 0,
+        gain < 3 ? 0 : 0.5,
+      ]);
+      expect(result.totals).toMatchObject({ assigned: 260, unassigned: 0 });
+      expect(result.diagnostics.boardingLimit).toMatchObject({
+        percent: 150,
+        denied: 50,
+        waiting: 0,
+      });
+    },
+  );
 
   it("reports arrivals in the hour actually used after waiting and preserves residual demand", () => {
     const { dia, config, train, demand, index } = setup();

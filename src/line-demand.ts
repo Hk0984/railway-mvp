@@ -66,10 +66,15 @@ export interface LineDemand {
     shares: Record<Direction, number[]>;
   };
   boardingLimitPercent?: number;
+  minimumTransferSeconds?: number;
   outside: OutsideArea[];
 }
+export const defaultLineTransferSeconds = 60;
 export type LineDemandByDay = Partial<
-  Record<SeparateDemandDay, Omit<LineDemand, "boardingLimitPercent">>
+  Record<
+    SeparateDemandDay,
+    Omit<LineDemand, "boardingLimitPercent" | "minimumTransferSeconds">
+  >
 >;
 
 export const activeDemandDay = (project: Project): DemandDay =>
@@ -90,7 +95,11 @@ export function lineDemandForDay(
   const separate =
     day === "weekday" ? undefined : project.lineDemandByDay?.[day];
   return separate
-    ? { ...separate, boardingLimitPercent: standard.boardingLimitPercent }
+    ? {
+        ...separate,
+        boardingLimitPercent: standard.boardingLimitPercent,
+        minimumTransferSeconds: standard.minimumTransferSeconds,
+      }
     : standard;
 }
 
@@ -103,9 +112,14 @@ export function setLineDemandForDay(
     project.lineDemand = structuredClone(settings);
     return;
   }
-  const { boardingLimitPercent, ...separate } = structuredClone(settings);
+  const { boardingLimitPercent, minimumTransferSeconds, ...separate } =
+    structuredClone(settings);
   const standard = project.lineDemand ?? defaultLineDemand();
-  project.lineDemand = { ...standard, boardingLimitPercent };
+  project.lineDemand = {
+    ...standard,
+    boardingLimitPercent,
+    minimumTransferSeconds,
+  };
   project.lineDemandByDay = { ...project.lineDemandByDay, [day]: separate };
 }
 
@@ -177,6 +191,12 @@ function validateDemandSettings(project: Project, d: LineDemand) {
     !validBoardingLimit(d.boardingLimitPercent)
   )
     throw new Error("乗車上限の混雑率は0%以上の数値で入力してください");
+  if (
+    d.minimumTransferSeconds !== undefined &&
+    (!Number.isSafeInteger(d.minimumTransferSeconds) ||
+      d.minimumTransferSeconds < 1)
+  )
+    throw new Error("最低乗換時間は1秒以上の整数で入力してください");
   const stations = new Map(project.stations.map((s) => [s.id, s.name]));
   for (const [id, v] of Object.entries(d.counts)) {
     if (

@@ -13,6 +13,7 @@ import {
   arrivalDirections,
   arrivalHours,
   defaultLineDemand,
+  defaultLineTransferSeconds,
   demandDayLabels,
   estimateLineDemand,
   hasSeparateDemand,
@@ -242,6 +243,7 @@ function demandPreview() {
       }
       <p class="muted">営業 ${n(totals.passenger, 0)}本／要確認 ${n(totals.review, 0)}本／輸送定員が未登録の営業列車 ${n(missing, 0)}本</p>
       ${limitPercent !== undefined ? `<p>乗車上限 ${n(limitPercent, 4)}%</p>` : ""}
+      <p>最低乗換時間 ${n(settings.minimumTransferSeconds ?? defaultLineTransferSeconds, 0)}秒</p>
       ${
         result
           ? limit
@@ -276,7 +278,9 @@ function search() {
       mode: route.mode,
       time,
       maxTransfers: 3,
-      minimumTransferSeconds: 120,
+      minimumTransferSeconds:
+        lineDemandForDay(project).minimumTransferSeconds ??
+        defaultLineTransferSeconds,
       directOnly: false,
       sort: "arrival",
       limit: 5,
@@ -415,7 +419,13 @@ function calculate() {
       window.start = Math.min(window.start, row.start);
       window.end = Math.max(window.end, row.end);
     }
-  const config = { ...defaultAssignmentConfig(), ...window };
+  const config = {
+    ...defaultAssignmentConfig(),
+    ...window,
+    minimumTransferSeconds:
+      lineDemandForDay(project).minimumTransferSeconds ??
+      defaultLineTransferSeconds,
+  };
   const {
     analytics,
     temporal,
