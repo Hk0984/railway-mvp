@@ -1,4 +1,9 @@
-import { validateLineDemand, type LineDemand } from "./line-demand";
+import {
+  validateLineDemand,
+  type DemandSelection,
+  type LineDemand,
+  type LineDemandByDay,
+} from "./line-demand";
 import {
   validateTemporalState,
   validateTemporalConfig,
@@ -112,6 +117,8 @@ export interface Project {
   schemaVersion: 1;
   datasetId?: string;
   lineDemand?: LineDemand;
+  lineDemandByDay?: LineDemandByDay;
+  demandSelection?: DemandSelection;
   serviceClasses?: ServiceClassification;
   typeCapacities?: Record<string, number>;
   assignmentConfig?: AssignmentConfig;

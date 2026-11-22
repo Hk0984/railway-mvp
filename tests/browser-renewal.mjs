@@ -331,6 +331,72 @@ try {
     /最大混雑率 [\d.]+%/,
   );
   await page.getByRole("link", { name: "データ設定" }).click();
+  const day = page.getByRole("combobox", { name: "需要の日区分", exact: true });
+  const board = page.getByLabel("緑丘ニュータウンの乗車人数", { exact: true });
+  const alight = page.getByLabel("緑丘ニュータウンの降車人数", { exact: true });
+  assert.equal(await day.inputValue(), "weekday");
+  await day.selectOption("friday");
+  assert.equal(await board.inputValue(), "24000");
+  await page
+    .locator("#demand-day-status")
+    .filter({ hasText: "平日（月〜木）の需要を使用" })
+    .waitFor();
+  await board.fill("1200");
+  await alight.fill("1300");
+  await timeBasis.selectOption("boarding");
+  for (const [i, share] of ["0", "100", "0", "0"].entries())
+    await page.locator(`[name="local${i}"]`).fill(share);
+  page.once("dialog", (dialog) => dialog.dismiss());
+  await day.selectOption("holiday");
+  assert.equal(await day.inputValue(), "friday");
+  assert.equal(await board.inputValue(), "1200");
+  await save.click();
+  await page.getByText("設定を保存しました", { exact: true }).waitFor();
+  await page
+    .locator("#demand-day-status")
+    .filter({ hasText: "金曜日の専用設定" })
+    .waitFor();
+
+  await day.selectOption("holiday");
+  assert.equal(await board.inputValue(), "24000");
+  await board.fill("7600");
+  await alight.fill("7800");
+  await timeBasis.selectOption("boarding");
+  for (const [i, share] of ["0", "0", "100", "0"].entries())
+    await page.locator(`[name="local${i}"]`).fill(share);
+  await save.click();
+  await page.getByText("設定を保存しました", { exact: true }).waitFor();
+  await page.reload();
+  assert.equal(await day.inputValue(), "holiday");
+  assert.equal(await board.inputValue(), "7600");
+  assert.equal(await alight.inputValue(), "7800");
+  assert.equal(await page.locator('[name="local2"]').inputValue(), "100");
+  await day.selectOption("weekday");
+  assert.equal(await board.inputValue(), "24000");
+  assert.equal(await alight.inputValue(), "24000");
+  assert.equal(await timeBasis.inputValue(), "profile");
+  await day.selectOption("friday");
+  assert.equal(await board.inputValue(), "1200");
+  assert.equal(await alight.inputValue(), "1300");
+  assert.equal(await page.locator('[name="local1"]').inputValue(), "100");
+  await page.getByRole("link", { name: "混雑ダイヤ図" }).click();
+  const periodDemand = page.locator("#demand-preview .preview-periods strong");
+  const friday = (await periodDemand.allTextContents()).map((value) =>
+    Number(value.replace(/[, 人]/g, "")),
+  );
+  assert.ok(friday[1] > 0 && friday[0] === 0 && friday[2] === 0);
+  await page.getByRole("button", { name: "混雑を計算" }).click();
+  await page.getByText("計算完了", { exact: true }).waitFor();
+  await day.selectOption("holiday");
+  assert.equal(await page.getByText("計算完了", { exact: true }).count(), 0);
+  const holiday = (await periodDemand.allTextContents()).map((value) =>
+    Number(value.replace(/[, 人]/g, "")),
+  );
+  assert.ok(holiday[2] > friday[1] && holiday[0] === 0 && holiday[1] === 0);
+  await page.getByRole("button", { name: "混雑を計算" }).click();
+  await page.getByText("計算完了", { exact: true }).waitFor();
+  await page.getByRole("link", { name: "データ設定" }).click();
+
   const fixture = await (
     await fetch(new URL("samples/basic-1.07.oud2", page.url()))
   ).arrayBuffer();
@@ -342,6 +408,10 @@ try {
   await page.getByText("basic-1.07.oud2 を読み込みました").waitFor();
   await page.locator("#active-dia").selectOption("oud-dia1");
   await page.getByRole("link", { name: "混雑ダイヤ図" }).click();
+  await day.selectOption("holiday");
+  await page.reload();
+  assert.equal(await page.locator("#active-dia").inputValue(), "oud-dia1");
+  assert.equal(await day.inputValue(), "holiday");
   await page
     .locator("#diagram-train")
     .selectOption({ label: "201 ／ 普通 ／ 上り" });

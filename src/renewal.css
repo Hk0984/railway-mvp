@@ -246,6 +246,15 @@ h3 {
   gap: 0.6rem;
   flex-wrap: wrap;
 }
+.heading-actions {
+  align-items: end;
+}
+.heading-actions label {
+  max-width: min(16rem, 100%);
+}
+#demand-day-status:empty {
+  display: none;
+}
 .section-heading {
   justify-content: space-between;
   margin-bottom: 1rem;

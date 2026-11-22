@@ -9,12 +9,18 @@ import { classificationCounts, isPassengerTrain } from "./classification";
 import { diagramPage, mountDiagram } from "./diagram-ui";
 import { download } from "./io";
 import {
+  activeDemandDay,
   arrivalDirections,
   arrivalHours,
   defaultLineDemand,
+  demandDayLabels,
   estimateLineDemand,
+  hasSeparateDemand,
+  isDemandDay,
+  lineDemandForDay,
   periods,
   serviceDay,
+  setLineDemandForDay,
   type OutsideArea,
 } from "./line-demand";
 import { validateProject, type Project } from "./model";
@@ -26,8 +32,11 @@ import { journeyCards, routeBody, type RouteForm } from "./renewal-route";
 import {
   applyTrainSettings,
   areaCard,
+  demandDayField,
+  demandDayStatus,
   readDemand,
   settingsBody,
+  timetableField,
   updateArrivalPreview,
   updateDemandTiming,
   updateStationPurposeDefaults,
@@ -84,13 +93,18 @@ const selection = () => ({
   passengerOnly: true,
 });
 const estimate = () => (demand ??= estimateLineDemand(project, diaId));
-const legacy = () =>
-  !project.lineDemand?.destinationArrival?.enabled &&
-  !project.lineDemand?.stationProfileTiming &&
-  !Object.keys(project.lineDemand?.stationProfiles ?? {}).length &&
-  !Object.keys(project.lineDemand?.counts ?? {}).length &&
-  !project.lineDemand?.outside.length &&
-  !!project.temporal?.slots.length;
+function legacy() {
+  const d = lineDemandForDay(project);
+  return (
+    !hasSeparateDemand(project) &&
+    !d.destinationArrival?.enabled &&
+    !d.stationProfileTiming &&
+    !Object.keys(d.stationProfiles ?? {}).length &&
+    !Object.keys(d.counts).length &&
+    !d.outside.length &&
+    !!project.temporal?.slots.length
+  );
+}
 
 function render() {
   disposeDiagram?.();
@@ -117,6 +131,8 @@ function render() {
       </div>${
         page === "diagram"
           ? `<div class="heading-actions">
+        ${timetableField(project, diaId)}
+        ${demandDayField(project)}
         <span id="assignment-progress" role="status">${e(assignmentStatus)}</span>
         <button type="button" class="primary" data-action="${worker ? "cancel" : "calculate"}">${worker ? "計算を中止" : result ? "混雑を再計算" : "混雑を計算"}</button>
       </div>`
@@ -162,6 +178,8 @@ function fail(reason: unknown) {
 function refreshSaveBar() {
   const el = document.querySelector("#form-state");
   if (el) el.textContent = dirty ? "未保存の変更があります" : "";
+  const dayStatus = document.querySelector("#demand-day-status");
+  if (dayStatus) dayStatus.textContent = demandDayStatus(project);
 }
 
 function demandPreview() {
@@ -192,7 +210,8 @@ function demandPreview() {
       .join(" · ");
     const assigned = result?.diagnostics.hourlyArrivals;
     const limit = result?.diagnostics.boardingLimit;
-    const limitPercent = project.lineDemand?.boardingLimitPercent;
+    const settings = lineDemandForDay(project);
+    const limitPercent = settings.boardingLimitPercent;
     const timeSummary = byArrival
       ? `<div class="table-scroll arrival-hour-grid"><table>
         <thead><tr><th scope="col">目的地への到着時刻</th><th scope="col">上り需要（人）</th><th scope="col">下り需要（人）</th>${assigned ? `<th scope="col">上り${limit ? "到着" : "配分"}（人）</th><th scope="col">下り${limit ? "到着" : "配分"}（人）</th>` : ""}</tr></thead>
@@ -206,12 +225,14 @@ function demandPreview() {
       : `<div class="preview-periods">${periods.map((period, i) => `<div><span>${period.label}</span><strong>${n(byTime[i])}<small> 人</small></strong></div>`).join("")}</div>`;
     return `<details id="demand-preview" class="surface preview" ${!result ? "open" : ""}>
       <summary>需要と計算条件</summary>
+      <p>需要の日区分　${demandDayLabels[activeDemandDay(project)]}</p>
+      ${demandDayStatus(project) ? `<p class="muted">${demandDayStatus(project)}</p>` : ""}
       ${
         legacy()
           ? "<p>以前保存した時間帯別ODを使用します。駅利用者数を登録すると新しい推計に切り替わります。</p>"
           : `
         ${timeSummary}
-        ${project.lineDemand?.stationProfileTiming ? '<p class="muted">駅の属性・利用目的から到着時刻を推計しています。</p>' : ""}
+        ${settings.stationProfileTiming ? '<p class="muted">駅の属性・利用目的から到着時刻を推計しています。</p>' : ""}
         ${smoothedArrivalShares ? '<p class="muted">時間内の到着需要を曲線で補間しています。</p>' : ""}
         ${byPurpose ? `<p>駅から出発する需要の内訳　${tripPurposes.map((purpose) => `${tripPurposeLabels[purpose]} ${n(byPurpose[purpose])}人`).join("・")}</p>` : ""}
         <p>路線外の配分対象　流入 ${n(external.inbound)}人・流出 ${n(external.outbound)}人</p>
@@ -312,7 +333,7 @@ function setProject(p: Project, save = true) {
   validateProject(p);
   p.datasetId ??= crypto.randomUUID();
   project = p;
-  diaId = p.timetables[0].id;
+  diaId = p.demandSelection?.timetableId ?? p.timetables[0].id;
   route = defaultRoute();
   searched = false;
   dirty = false;
@@ -395,8 +416,15 @@ function calculate() {
       window.end = Math.max(window.end, row.end);
     }
   const config = { ...defaultAssignmentConfig(), ...window };
-  const { analytics, temporal, temporalConfig, lineDemand, ...assignProject } =
-    project;
+  const {
+    analytics,
+    temporal,
+    temporalConfig,
+    lineDemand,
+    lineDemandByDay,
+    demandSelection,
+    ...assignProject
+  } = project;
   const current = new Worker(
     new URL("./assignment-worker.ts", import.meta.url),
     { type: "module" },
@@ -455,7 +483,7 @@ app.addEventListener("submit", (event) => {
   } else if (form.id === "settings-form") {
     try {
       const next = structuredClone(project);
-      next.lineDemand = readDemand(form, project, dia());
+      setLineDemandForDay(next, readDemand(form, project, dia()));
       applyTrainSettings(
         form,
         next,
@@ -500,16 +528,25 @@ app.addEventListener("input", (event) => {
 app.addEventListener("change", (event) => {
   const input = event.target as HTMLInputElement;
   if (input.id === "open-file") void openFile(input);
-  if (input.id === "active-dia") {
+  if (input.id === "active-dia" || input.id === "active-demand-day") {
+    const switchDay = input.id === "active-demand-day";
+    const oldDay = activeDemandDay(project);
     if (hasUnsavedChanges()) {
-      input.value = diaId;
+      input.value = switchDay ? oldDay : diaId;
       return;
     }
-    diaId = input.value;
+    if (!switchDay) diaId = input.value;
+    const day = switchDay && isDemandDay(input.value) ? input.value : oldDay;
+    project = { ...project, demandSelection: { day, timetableId: diaId } };
     dirty = false;
     searched = false;
+    error = "";
+    notice = "";
     resetResult();
+    persist();
     render();
+    document.getElementById(input.id)?.focus();
+    return;
   }
   const form = input.closest<HTMLFormElement>("#settings-form");
   if (!form) return;

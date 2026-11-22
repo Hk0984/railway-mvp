@@ -7,12 +7,15 @@ import {
   type ServiceClass,
 } from "./classification";
 import {
+  activeDemandDay,
   arrivalDirections,
   arrivalHourCount,
   arrivalHours,
   boundaryTrains,
   initialArrivalShares,
-  defaultLineDemand,
+  demandDayLabels,
+  hasSeparateDemand,
+  lineDemandForDay,
   periods,
   type LineDemand,
   type OutsideArea,
@@ -36,6 +39,27 @@ export function options(items: { id: string; name: string }[], value: string) {
         `<option value="${e(id)}" ${id === value ? "selected" : ""}>${e(name)}</option>`,
     )
     .join("");
+}
+
+const demandDays = Object.entries(demandDayLabels).map(([id, name]) => ({
+  id,
+  name,
+}));
+
+export function demandDayField(project: Project) {
+  return `<label>需要の日区分<select id="active-demand-day">${options(demandDays, activeDemandDay(project))}</select></label>`;
+}
+
+export function demandDayStatus(project: Project) {
+  const day = activeDemandDay(project);
+  if (day === "weekday") return "";
+  return hasSeparateDemand(project)
+    ? `${demandDayLabels[day]}の専用設定を使用します。`
+    : `平日（月〜木）の需要を使用しています。${demandDayLabels[day]}の設定を保存すると、専用設定に切り替わります。`;
+}
+
+export function timetableField(project: Project, diaId: string) {
+  return `<label>対象ダイヤ<select id="active-dia">${options(project.timetables, diaId)}</select></label>`;
 }
 
 const num = (
@@ -195,7 +219,7 @@ export function areaCard(
 }
 
 export function settingsBody(p: Project, dia: Timetable, draft?: LineDemand) {
-  const d = draft ?? p.lineDemand ?? defaultLineDemand();
+  const d = draft ?? lineDemandForDay(p);
   const timing = d.stationProfileTiming
     ? "profile"
     : d.destinationArrival?.enabled
@@ -205,7 +229,8 @@ export function settingsBody(p: Project, dia: Timetable, draft?: LineDemand) {
   <section class="surface timetable-settings">
     <div class="section-heading"><div><h2>ダイヤデータ</h2><p class="muted">OuDia2ndの時刻表または保存した設定を開きます。</p></div></div>
     <div class="fields">
-      <label>対象ダイヤ<select id="active-dia">${options(p.timetables, dia.id)}</select></label>
+      ${timetableField(p, dia.id)}
+      ${demandDayField(p)}
       <label>文字コード<select id="encoding"><option value="auto">自動判定</option><option value="utf-8">UTF-8</option><option value="shift_jis">Shift_JIS</option><option value="utf-16le">UTF-16 LE</option><option value="utf-16be">UTF-16 BE</option></select></label>
       <label class="file-pick">ファイルを開く<input type="file" id="open-file" accept=".oud2,.json"></label>
     </div>
@@ -214,7 +239,7 @@ export function settingsBody(p: Project, dia: Timetable, draft?: LineDemand) {
   </section>
   <form id="settings-form">
     <section class="surface">
-      <div class="section-heading"><div><h2>駅利用者数</h2><p class="muted">1日あたりの人数。行先は到達可能な駅の降車人数に重みを掛けて配分します。</p></div></div>
+      <div class="section-heading"><div><h2>駅利用者数</h2><p class="muted">1日あたりの人数。行先は到達可能な駅の降車人数に重みを掛けて配分します。</p><p class="muted" id="demand-day-status">${demandDayStatus(p)}</p></div></div>
       <div class="table-scroll"><table><thead><tr><th scope="col">駅</th><th scope="col">乗車（人）</th><th scope="col">降車（人）</th><th scope="col">行先の重み</th></tr></thead>
       <tbody>${p.stations
         .map((s, i) => {
@@ -266,7 +291,7 @@ export function settingsBody(p: Project, dia: Timetable, draft?: LineDemand) {
       <div class="fields single-field">
         <label>乗車上限の混雑率（%）<input name="boarding-limit-percent" type="number" min="0" step="any" value="${d.boardingLimitPercent ?? ""}" placeholder="例：150" aria-describedby="boarding-limit-hint"></label>
       </div>
-      <p id="boarding-limit-hint" class="muted">空欄なら上限なし。指定の混雑率に達すると、乗り切れない利用者は目的地へ行ける後続便を待ちます。</p>
+      <p id="boarding-limit-hint" class="muted">乗車上限は全日区分で共通です。空欄なら上限なし。指定の混雑率に達すると、乗り切れない利用者は目的地へ行ける後続便を待ちます。</p>
       <div class="table-scroll"><table><thead><tr><th scope="col">列車種別</th><th scope="col">営業区分</th><th scope="col">輸送定員（人）</th></tr></thead>
       <tbody>${p.types
         .map((t, i) => {
@@ -311,7 +336,7 @@ export function readDemand(
 ): LineDemand {
   const fields = new FormData(form);
   const str = (key: string) => String(fields.get(key) ?? "");
-  const base = p.lineDemand ?? defaultLineDemand();
+  const base = lineDemandForDay(p);
   const timing = str("demand-time-mode");
   const byArrival = timing === "arrival";
   const shares: LineDemand["shares"] =

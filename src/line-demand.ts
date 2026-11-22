@@ -22,6 +22,20 @@ export const periods = [
 ] as const;
 export const arrivalDirections = ["up", "down"] as const;
 export const arrivalHourCount = 24;
+export const demandDayLabels = {
+  weekday: "平日（月〜木）",
+  friday: "金曜日",
+  holiday: "土休日",
+} as const;
+export type DemandDay = keyof typeof demandDayLabels;
+type SeparateDemandDay = Exclude<DemandDay, "weekday">;
+export interface DemandSelection {
+  day: DemandDay;
+  timetableId: string;
+}
+export const isDemandDay = (value: unknown): value is DemandDay =>
+  typeof value === "string" && Object.hasOwn(demandDayLabels, value);
+
 const hourSeconds = 3600;
 export type Flow = "local" | "inbound" | "outbound";
 
@@ -53,6 +67,46 @@ export interface LineDemand {
   };
   boardingLimitPercent?: number;
   outside: OutsideArea[];
+}
+export type LineDemandByDay = Partial<
+  Record<SeparateDemandDay, Omit<LineDemand, "boardingLimitPercent">>
+>;
+
+export const activeDemandDay = (project: Project): DemandDay =>
+  project.demandSelection?.day ?? "weekday";
+
+export function hasSeparateDemand(
+  project: Project,
+  day = activeDemandDay(project),
+) {
+  return day !== "weekday" && project.lineDemandByDay?.[day] !== undefined;
+}
+
+export function lineDemandForDay(
+  project: Project,
+  day = activeDemandDay(project),
+): LineDemand {
+  const standard = project.lineDemand ?? defaultLineDemand();
+  const separate =
+    day === "weekday" ? undefined : project.lineDemandByDay?.[day];
+  return separate
+    ? { ...separate, boardingLimitPercent: standard.boardingLimitPercent }
+    : standard;
+}
+
+export function setLineDemandForDay(
+  project: Project,
+  settings: LineDemand,
+  day = activeDemandDay(project),
+) {
+  if (day === "weekday") {
+    project.lineDemand = structuredClone(settings);
+    return;
+  }
+  const { boardingLimitPercent, ...separate } = structuredClone(settings);
+  const standard = project.lineDemand ?? defaultLineDemand();
+  project.lineDemand = { ...standard, boardingLimitPercent };
+  project.lineDemandByDay = { ...project.lineDemandByDay, [day]: separate };
 }
 
 export function defaultLineDemand(sample = false): LineDemand {
@@ -94,8 +148,28 @@ const nonnegative = (v: number) => Number.isFinite(v) && v >= 0 && v <= 1e9;
 export const validBoardingLimit = (v: unknown): v is number =>
   typeof v === "number" && Number.isFinite(v) && v >= 0;
 export function validateLineDemand(project: Project) {
-  const d = project.lineDemand;
-  if (d === undefined) return;
+  const selection = project.demandSelection;
+  if (
+    selection !== undefined &&
+    (!selection ||
+      !isDemandDay(selection.day) ||
+      !project.timetables.some((dia) => dia.id === selection.timetableId))
+  )
+    throw new Error("需要の日区分・対象ダイヤの選択を確認してください");
+  if (project.lineDemand !== undefined)
+    validateDemandSettings(project, project.lineDemand);
+  const byDay = project.lineDemandByDay;
+  if (byDay === undefined) return;
+  if (!byDay || typeof byDay !== "object" || Array.isArray(byDay))
+    throw new Error("曜日ごとの需要設定の形式を確認してください");
+  for (const [day, settings] of Object.entries(byDay)) {
+    if (day !== "friday" && day !== "holiday")
+      throw new Error("曜日ごとの需要設定の日区分を確認してください");
+    validateDemandSettings(project, settings);
+  }
+}
+
+function validateDemandSettings(project: Project, d: LineDemand) {
   if (!d || !d.counts || !d.shares || !Array.isArray(d.outside))
     throw new Error("需要設定の形式を確認してください");
   if (
@@ -406,9 +480,13 @@ function profileVolumes(
   }
 }
 
-export function estimateLineDemand(project: Project, diaId: string) {
+export function estimateLineDemand(
+  project: Project,
+  diaId: string,
+  day = activeDemandDay(project),
+) {
   validateLineDemand(project);
-  const settings = project.lineDemand ?? defaultLineDemand();
+  const settings = lineDemandForDay(project, day);
   const ids = project.stations.map((s) => s.id);
   const dia = project.timetables.find((t) => t.id === diaId)!;
   const passenger = dia.trains.filter((t) =>

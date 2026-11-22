@@ -5,7 +5,9 @@ import {
   arrivalHourIndex,
   defaultLineDemand,
   estimateLineDemand,
+  lineDemandForDay,
   serviceDay,
+  setLineDemandForDay,
   type OutsideArea,
 } from "../src/line-demand";
 import { validateProject } from "../src/model";
@@ -30,6 +32,79 @@ function area(overrides: Partial<OutsideArea> = {}): OutsideArea {
 }
 
 describe("single-line demand", () => {
+  it("keeps independent counts and time distributions when using the same timetable on different days", () => {
+    const p = sampleProject();
+    const counts = (board: number, alight: number) => ({
+      s0: { board, alight: 0, weight: 1 },
+      s4: { board: 0, alight, weight: 1 },
+    });
+    p.lineDemand = {
+      ...defaultLineDemand(),
+      counts: counts(120, 120),
+      shares: { local: [100, 0, 0, 0] },
+      boardingLimitPercent: 150,
+    };
+    expect(lineDemandForDay(p, "friday")).toEqual(p.lineDemand);
+    expect(lineDemandForDay(p, "holiday")).toEqual(p.lineDemand);
+    expect(estimateLineDemand(p, "weekday", "friday").byTime).toEqual([
+      120, 0, 0, 0,
+    ]);
+
+    setLineDemandForDay(
+      p,
+      {
+        ...lineDemandForDay(p, "friday"),
+        counts: counts(180, 180),
+        shares: { local: [0, 0, 0, 100] },
+      },
+      "friday",
+    );
+    const hourly = Array<number>(24).fill(0);
+    hourly[13] = 100;
+    setLineDemandForDay(
+      p,
+      {
+        ...lineDemandForDay(p, "holiday"),
+        counts: counts(80, 80),
+        boardingLimitPercent: 170,
+        destinationArrival: {
+          enabled: true,
+          shares: { up: hourly, down: hourly },
+        },
+      },
+      "holiday",
+    );
+
+    p.demandSelection = { day: "holiday", timetableId: "weekday" };
+    const reopened = JSON.parse(JSON.stringify(p));
+    validateProject(reopened);
+    expect(estimateLineDemand(reopened, "weekday").dailyBoard).toBe(80);
+    expect(estimateLineDemand(reopened, "weekday").byArrival?.down[13]).toBe(
+      80,
+    );
+    expect(estimateLineDemand(reopened, "weekday", "friday").byTime).toEqual([
+      0, 0, 0, 180,
+    ]);
+    expect(estimateLineDemand(reopened, "weekday", "weekday").byTime).toEqual([
+      120, 0, 0, 0,
+    ]);
+    expect(lineDemandForDay(reopened, "friday").boardingLimitPercent).toBe(170);
+    expect(lineDemandForDay(reopened, "weekday").boardingLimitPercent).toBe(
+      170,
+    );
+  });
+
+  it("validates saved demand for an inactive day", () => {
+    const p = sampleProject();
+    p.lineDemandByDay = {
+      friday: { ...defaultLineDemand(), shares: { local: [1, 2, 3, 4] } },
+    };
+    expect(() => validateProject(p)).toThrow("時間帯の割合は各設定で合計100%");
+    p.lineDemandByDay.friday = defaultLineDemand();
+    p.demandSelection = { day: "friday", timetableId: "unknown" };
+    expect(() => validateProject(p)).toThrow("需要の日区分・対象ダイヤ");
+  });
+
   it("uses station attributes and purpose shares to distribute the same daily boardings by destination and hour", () => {
     const p = sampleProject();
     const d = (p.lineDemand = defaultLineDemand());
