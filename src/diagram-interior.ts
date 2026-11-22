@@ -4,6 +4,8 @@ import { numberText as n } from "./ui-utils";
 const sectionsPerCar = 4;
 const maxVisiblePeople = 4096;
 const doorPositions = [81, 359];
+const doorRows = [13, 181];
+const doorHeight = 10;
 const benchY = [27, 159];
 
 const dot = (x: number, y: number, radius: number) =>
@@ -44,17 +46,24 @@ export function trainInterior(
   }).join("");
 
   const columns = Math.max(20, Math.ceil(Math.sqrt(standing * 4)));
-  const rows = Math.max(5, Math.ceil(standing / columns));
+  // Leave a few open positions so the door clusters remain visible at high loads.
+  const rows = Math.max(5, Math.ceil((standing * 1.2) / columns));
   const dx = 390 / columns;
   const dy = 105 / rows;
   const aisleRadius = Math.min(6.5, dx * 0.4, dy * 0.4);
-  const aisleDots = Array.from({ length: standing }, (_, i) => {
-    const columnIndex = i % columns;
-    const offset = Math.floor(columnIndex / 2);
-    const column = columnIndex % 2 === 0 ? offset : columns - 1 - offset;
-    const row = (Math.floor(i / columns) + column * 2 + 2) % rows;
-    return dot(25 + (column + 0.5) * dx, 49 + (row + 0.5) * dy, aisleRadius);
-  }).join("");
+  const aisleDots = Array.from({ length: columns * rows }, (_, i) => {
+    const x = 25 + ((i % columns) + 0.5) * dx;
+    const y = 49 + (Math.floor(i / columns) + 0.5) * dy;
+    const horizontal = Math.min(
+      ...doorPositions.map((doorX) => Math.abs(x - doorX)),
+    );
+    const vertical = Math.min(y - (doorRows[0] + doorHeight), doorRows[1] - y);
+    return { x, y, doorDistance: Math.hypot(horizontal, vertical) };
+  })
+    .sort((a, b) => a.doorDistance - b.doorDistance)
+    .slice(0, standing)
+    .map(({ x, y }) => dot(x, y, aisleRadius))
+    .join("");
 
   return `<figure class="diagram-interior">
     ${caption}
@@ -62,11 +71,11 @@ export function trainInterior(
       <rect class="diagram-interior-shell" x="12" y="13" width="416" height="178" rx="20"/>
       ${doorPositions
         .map((x) =>
-          [13, 181]
+          doorRows
             .map(
               (y) =>
-                `<rect class="diagram-interior-door" x="${x - 24}" y="${y}" width="48" height="10" rx="2"/>
-        <path class="diagram-interior-door" d="M${x} ${y}v10"/>`,
+                `<rect class="diagram-interior-door" x="${x - 24}" y="${y}" width="48" height="${doorHeight}" rx="2"/>
+        <path class="diagram-interior-door" d="M${x} ${y}v${doorHeight}"/>`,
             )
             .join(""),
         )
@@ -85,6 +94,6 @@ export function trainInterior(
       <span class="diagram-interior-seated">着席</span>
       <span class="diagram-interior-standing">立席</span>
     </div>
-    <p class="muted">ドア2か所とその間を1両の約4分の1として表示。乗客は各車両に均等に乗り、座席は輸送定員の${seatedCrowdingLimit}%と仮定しています。</p>
+    <p class="muted">ドア2か所とその間を1両の約4分の1として表示。乗客は各車両に均等に乗り、座席は輸送定員の${seatedCrowdingLimit}%と仮定しています。立席はドア前に集まりやすい配置で描いています。</p>
   </figure>`;
 }

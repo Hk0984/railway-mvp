@@ -31,6 +31,35 @@ describe("列車ダイヤ図", () => {
     expect(veryCrowded.match(/<circle/g)).toHaveLength(103);
   });
 
+  it("places standing passengers near the doors first and spreads toward the aisle center", () => {
+    const standingPositions = (passengers: number) => {
+      const svg = trainInterior(passengers, 800, 8);
+      const standing = svg.match(
+        /class="diagram-interior-standing">(.*?)<\/g>/,
+      )![1];
+      return Array.from(
+        standing.matchAll(/cx="([\d.]+)" cy="([\d.]+)"/g),
+        ([, x, y]) => ({
+          x: Number(x),
+          y: Number(y),
+        }),
+      );
+    };
+    const byDoor = ({ x }: { x: number }) =>
+      Math.min(Math.abs(x - 81), Math.abs(x - 359)) <= 48;
+    const light = standingPositions(448);
+    expect(light).toHaveLength(4);
+    expect(
+      light.every((point) => byDoor(point) && Math.abs(point.y - 102) > 35),
+    ).toBe(true);
+    expect(light.filter(({ x }) => x < 220)).toHaveLength(2);
+
+    const crowded = standingPositions(3520);
+    expect(crowded).toHaveLength(100);
+    expect(crowded.some(({ x }) => x > 180 && x < 260)).toBe(true);
+    expect(crowded.filter(byDoor).length).toBeGreaterThan(crowded.length / 2);
+  });
+
   it("includes threshold endpoints and never assigns a band to missing values", () => {
     expect(
       [
