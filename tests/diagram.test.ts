@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { assignDemand } from "../src/assignment";
 import { defaultAssignmentConfig } from "../src/assignment-model";
 import { trainInterior } from "../src/diagram-interior";
+import { bench, seatingPositions } from "../src/diagram-interior-layout";
 import {
   crowdingBand,
   crowdingLimits,
@@ -31,6 +32,23 @@ describe("列車ダイヤ図", () => {
     expect(veryCrowded.match(/<circle/g)).toHaveLength(103);
   });
 
+  it("chooses the bench ends and keeps space before filling neighboring seats", () => {
+    const spaced = seatingPositions(10, 6).people;
+    expect(spaced.slice(0, 4).every(({ x }) => Math.abs(x - 220) > 80)).toBe(
+      true,
+    );
+    for (const top of bench.rows) {
+      const row = spaced.filter(({ y }) => y === top + bench.height / 2);
+      const ordered = row.map(({ x }) => x).sort((a, b) => a - b);
+      expect(ordered).toHaveLength(3);
+      expect(ordered[1] - ordered[0]).toBeGreaterThan(80);
+      expect(ordered[2] - ordered[1]).toBeGreaterThan(80);
+    }
+    const full = seatingPositions(10, 10).people;
+    expect(full.slice(0, spaced.length)).toEqual(spaced);
+    expect(new Set(full.map(({ x, y }) => `${x},${y}`)).size).toBe(10);
+  });
+
   it("places standing passengers near the doors first and spreads toward the aisle center", () => {
     const standingPositions = (passengers: number) => {
       const svg = trainInterior(passengers, 800, 8);
@@ -58,6 +76,8 @@ describe("列車ダイヤ図", () => {
     expect(crowded).toHaveLength(100);
     expect(crowded.some(({ x }) => x > 180 && x < 260)).toBe(true);
     expect(crowded.filter(byDoor).length).toBeGreaterThan(crowded.length / 2);
+    expect(crowded.slice(0, light.length)).toEqual(light);
+    expect(new Set(crowded.map(({ y }) => y)).size).toBeGreaterThan(50);
   });
 
   it("includes threshold endpoints and never assigns a band to missing values", () => {
