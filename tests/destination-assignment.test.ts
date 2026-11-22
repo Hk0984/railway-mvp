@@ -3,7 +3,10 @@ import {
   defaultAssignmentConfig,
   type AssignmentDemand,
 } from "../src/assignment-model";
-import { assignDiagramCapacity } from "../src/diagram-capacity";
+import {
+  assignDiagramCapacity,
+  assignRailwayDiagram,
+} from "../src/diagram-capacity";
 import { assignDestinationArrivals } from "../src/destination-assignment";
 import {
   demandMass,
@@ -24,6 +27,48 @@ import { sampleProject } from "../src/sample";
 import type { Direction, Train } from "../src/model";
 
 const at = (hours: number, minutes = 0) => hours * 3600 + minutes * 60;
+
+it("weighs crowding within the requested hour and keeps hourly demand", () => {
+  const project = sampleProject();
+  const dia = project.timetables[0];
+  const [first, second, third] = dia.trains;
+  dia.trains = [first, second, third];
+  for (const [i, train] of dia.trains.entries()) {
+    train.capacity = i === 0 ? 100 : 400;
+    train.stops = [
+      { stationId: "s0", status: "stop", departure: at(8, 4 + i) },
+      { stationId: "s4", status: "stop", arrival: at(8, [34, 36, 40][i]) },
+    ];
+  }
+  const datasetId = project.datasetId!;
+  const index = buildRoutingIndex([
+    { datasetId, project, timetableId: dia.id },
+  ]);
+  const row: AssignmentDemand = {
+    datasetId,
+    origin: "s0",
+    destination: "s4",
+    start: at(8, 30),
+    end: at(8, 38),
+    passengers: 240,
+    purpose: "commute",
+    source: "manual",
+    kind: "outbound",
+    arrivalDirection: "down",
+  };
+  const config = { ...defaultAssignmentConfig(), ...serviceDay(project) };
+  const before = assignDestinationArrivals(index, [row], config);
+  const after = assignRailwayDiagram(index, [row], config);
+  expect(after.loads[0].totalBoardings).toBeLessThan(
+    before.loads[0].totalBoardings,
+  );
+  expect(after.loads[1].totalBoardings).toBeGreaterThan(
+    before.loads[1].totalBoardings,
+  );
+  expect(after.loads[2].totalBoardings).toBe(0);
+  expect(after.diagnostics.hourlyArrivals?.down[8]).toBeCloseTo(240);
+  expect(after.totals).toMatchObject({ assigned: 240, unassigned: 0 });
+});
 
 function continuationExample(
   throughArrival: number,
@@ -116,6 +161,23 @@ it("keeps a direct local candidate after rejecting a needless transfer to it", (
     unassigned: 0,
     boardingEvents: 60,
   });
+});
+
+it("accepts a slightly later same-train connection if it avoids a crowded leg", () => {
+  const { project, config, row } = continuationExample(at(8, 29));
+  const dia = project.timetables[0];
+  dia.trains[0].capacity = 160;
+  dia.trains[1].capacity = 400;
+  const index = buildRoutingIndex([
+    { datasetId: row.datasetId, project, timetableId: dia.id },
+  ]);
+  const demand = { ...row, passengers: 160 };
+  const before = assignDestinationArrivals(index, [demand], config);
+  const after = assignRailwayDiagram(index, [demand], config);
+  expect(before.loads[1].totalBoardings).toBe(0);
+  expect(after.loads[1].totalBoardings).toBeGreaterThan(0);
+  expect(after.loads[0].totalBoardings).toBe(160);
+  expect(after.totals).toMatchObject({ assigned: 160, unassigned: 0 });
 });
 
 it("finds an earlier feeder that needs the transfer after rejecting a needless transfer to the same local", () => {

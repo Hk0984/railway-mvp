@@ -1,10 +1,7 @@
 /// <reference lib="webworker" />
 import { buildRoutingIndex } from "./routing";
-import { assignDiagramCapacity } from "./diagram-capacity";
-import { preferThroughJourneys } from "./diagram-continuation";
+import { assignRailwayDiagram } from "./diagram-capacity";
 import { assignDemand } from "./assignment";
-import { assignDestinationArrivals } from "./destination-assignment";
-import { lineAssignmentProfile } from "./line-assignment-profile";
 import { assignmentTransfers } from "./diagram-transfers";
 import type { Direction } from "./model";
 import type { DatasetSelection, TransferLink } from "./routing-model";
@@ -31,25 +28,29 @@ self.onmessage = (
       index = buildRoutingIndex(p.selections, p.links, {
         includeBoundaryBoards: p.input.some((r) => r.boundaryOriginTrains),
       });
-    if (p.forDiagram && p.boardingLimitPercent !== undefined) {
-      const result = assignDiagramCapacity(
+    const fastDiagram =
+      p.selections.length === 1 &&
+      !p.links.length &&
+      p.config.method === "fastest" &&
+      p.config.maxTransfers <= 1 &&
+      !p.config.capacityConstrained &&
+      !p.config.integer &&
+      !p.config.arrivalModel &&
+      !p.compare &&
+      !p.compareCapacity;
+    if (
+      p.forDiagram &&
+      (fastDiagram ||
+        p.boardingLimitPercent !== undefined ||
+        p.input.some((row) => row.arrivalDirection))
+    ) {
+      const result = assignRailwayDiagram(
         index,
         p.input,
         p.config,
         p.boardingLimitPercent,
         (done, total, stage) =>
           self.postMessage({ type: "progress", done, total, stage }),
-        p.smoothedArrivalShares,
-      );
-      self.postMessage({ type: "result", results: [result] });
-      return;
-    }
-    if (p.forDiagram && p.input.some((row) => row.arrivalDirection)) {
-      const result = assignDestinationArrivals(
-        index,
-        p.input,
-        p.config,
-        (done, total) => self.postMessage({ type: "progress", done, total }),
         p.smoothedArrivalShares,
       );
       self.postMessage({ type: "result", results: [result] });
@@ -66,32 +67,15 @@ self.onmessage = (
         ]
       : modes.map((method) => ({ ...p.config, method }));
     for (const config of configs) {
-      const fast =
-        p.forDiagram &&
-        p.selections.length === 1 &&
-        !p.links.length &&
-        config.method === "fastest" &&
-        config.maxTransfers <= 1 &&
-        !config.capacityConstrained &&
-        !config.integer &&
-        !config.arrivalModel;
       results.push(
-        assignDemand(
-          index,
-          p.input,
-          config,
-          (done, total, stage) =>
-            self.postMessage({
-              type: "progress",
-              method: config.method,
-              done,
-              total,
-              stage,
-            }),
-          fast
-            ? lineAssignmentProfile(index, { retainThrough: true })
-            : undefined,
-          fast ? preferThroughJourneys : undefined,
+        assignDemand(index, p.input, config, (done, total, stage) =>
+          self.postMessage({
+            type: "progress",
+            method: config.method,
+            done,
+            total,
+            stage,
+          }),
         ),
       );
     }

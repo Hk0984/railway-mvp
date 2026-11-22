@@ -4,7 +4,10 @@ import {
   defaultAssignmentConfig,
   type AssignmentDemand,
 } from "../src/assignment-model";
-import { assignDiagramCapacity } from "../src/diagram-capacity";
+import {
+  assignDiagramCapacity,
+  assignRailwayDiagram,
+} from "../src/diagram-capacity";
 import { stationBoardingChart } from "../src/diagram-train-chart";
 import { assignmentTransfers } from "../src/diagram-transfers";
 import { serviceDay } from "../src/line-demand";
@@ -54,6 +57,44 @@ function setup() {
 }
 
 describe("乗車上限", () => {
+  it.each([undefined, 150])(
+    "shifts some riders to a train with room to sit, with limit %s",
+    (limit) => {
+      const { dia, config, train, demand, index } = setup();
+      dia.trains = [
+        train("速達", [
+          { stationId: "s0", status: "stop", departure: at(8, 2) },
+          { stationId: "s4", status: "stop", arrival: at(8, 30) },
+        ]),
+        {
+          ...train("空席あり", [
+            { stationId: "s0", status: "stop", departure: at(8, 3) },
+            { stationId: "s4", status: "stop", arrival: at(8, 33) },
+          ]),
+          capacity: 200,
+        },
+        train("遅すぎる便", [
+          { stationId: "s0", status: "stop", departure: at(8, 4) },
+          { stationId: "s4", status: "stop", arrival: at(8, 41) },
+        ]),
+      ];
+      const rows = [demand("s0", "s4", at(8), at(8, 1), 120)];
+      const result = assignRailwayDiagram(index(), rows, config, limit);
+      expect(result.loads.map((l) => l.segmentLoads[0])).toEqual([60, 60, 0]);
+      expect(result.loads[1].peakOccupancy).toBe(0.3);
+      expect(result.totals).toMatchObject({ assigned: 120, unassigned: 0 });
+      expect(result.diagnostics.crowdingConsidered).toBe(true);
+
+      if (limit === undefined) {
+        dia.trains[1].capacity = undefined;
+        const unknown = assignRailwayDiagram(index(), rows, config);
+        expect(unknown.loads.map((l) => l.segmentLoads[0])).toEqual([
+          120, 0, 0,
+        ]);
+      }
+    },
+  );
+
   it.each([2, 3, 5])(
     "limits boarding, frees space on alighting, and accounts for a %i-minute gain from a later train",
     (gain) => {

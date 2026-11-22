@@ -442,25 +442,30 @@ export function aggregateTrainLoads(
     }
     for (const key of touched) loads.get(key)!.uniquePassengers += a.passengers;
   }
-  for (const l of loads.values()) {
-    let onboard = 0;
-    for (let i = 0; i < l.stops.length; i++) {
-      onboard += l.boardings[i] - l.alightings[i];
-      if (Math.abs(onboard) < 1e-9) onboard = 0;
-      if (i < l.stops.length - 1) l.segmentLoads.push(onboard);
-    }
-    l.totalBoardings = sum(l.boardings);
-    l.totalAlightings = sum(l.alightings);
-    l.peakLoad = Math.max(0, ...l.segmentLoads);
-    l.peakSegments = l.segmentLoads.flatMap((n, i) =>
-      l.peakLoad > 0 && close(n, l.peakLoad) ? [i] : [],
-    );
-    l.occupancies = l.segmentLoads.map((n) =>
-      l.capacity === null ? null : n / l.capacity,
-    );
-    l.peakOccupancy = l.capacity === null ? null : l.peakLoad / l.capacity;
-  }
+  for (const l of loads.values()) summarizeTrainLoad(l);
   return [...loads.values()];
+}
+
+export function summarizeTrainLoad(load: TrainLoad) {
+  let onboard = 0;
+  load.segmentLoads = [];
+  for (let i = 0; i < load.stops.length; i++) {
+    onboard += load.boardings[i] - load.alightings[i];
+    if (Math.abs(onboard) < 1e-9) onboard = 0;
+    if (i < load.stops.length - 1) load.segmentLoads.push(onboard);
+  }
+  load.totalBoardings = sum(load.boardings);
+  load.totalAlightings = sum(load.alightings);
+  load.peakLoad = Math.max(0, ...load.segmentLoads);
+  load.peakSegments = load.segmentLoads.flatMap((count, i) =>
+    load.peakLoad > 0 && close(count, load.peakLoad) ? [i] : [],
+  );
+  load.occupancies = load.segmentLoads.map((count) =>
+    load.capacity === null ? null : count / load.capacity,
+  );
+  load.peakOccupancy =
+    load.capacity === null ? null : load.peakLoad / load.capacity;
+  return load;
 }
 export function validateAssignment(
   index: RoutingIndex,
