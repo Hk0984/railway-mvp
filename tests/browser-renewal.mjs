@@ -60,9 +60,30 @@ try {
   await zoom.selectOption("160");
   assert.equal(await zoom.locator("option:checked").innerText(), "25%");
   await zoom.selectOption("640");
+  const segmentDetail = page.locator("#diagram-segment-detail");
+  const interior = segmentDetail.getByRole("img", { name: /車内の模式図/ });
+  const diagramTrain = page.locator("#diagram-train");
+  const section = page.locator("#diagram-section");
+  const localCars = page.getByLabel("普通の編成両数", { exact: true });
+  const rapidCars = page.getByLabel("快速の編成両数", { exact: true });
   await page.getByRole("button", { name: "混雑を計算" }).click();
   await page.getByText("計算完了", { exact: true }).waitFor();
-  await page.locator("#diagram-train").selectOption("down-8");
+  await diagramTrain.selectOption("down-8");
+  await section.selectOption("0");
+  assert.equal(await interior.count(), 0);
+  await segmentDetail.getByRole("link", { name: "データ設定" }).click();
+  await localCars.fill("8");
+  await rapidCars.fill("6");
+  await page.getByRole("button", { name: "設定を保存", exact: true }).click();
+  await page.getByText("設定を保存しました", { exact: true }).waitFor();
+  await page.getByRole("link", { name: "混雑ダイヤ図" }).click();
+  await page.getByRole("button", { name: "混雑を計算" }).click();
+  await page.getByText("計算完了", { exact: true }).waitFor();
+  await diagramTrain.selectOption("down-8");
+  assert.match(
+    await page.locator("#diagram-train-detail").innerText(),
+    /編成両数 8両/,
+  );
   const trainChart = page.locator("#diagram-train-detail .diagram-train-chart");
   assert.deepEqual(
     await trainChart.locator(".diagram-chart-station").allTextContents(),
@@ -88,10 +109,13 @@ try {
     await page.locator("#diagram-segment-detail").innerText(),
     /混雑率 [0-9.]+%/,
   );
-  const segmentDetail = page.locator("#diagram-segment-detail");
-  const interior = segmentDetail.getByRole("img", { name: /車内の模式図/ });
   await interior.waitFor();
-  assert.ok((await interior.locator("circle").count()) > 0);
+  const count = Number(
+    (await interior.getAttribute("aria-label")).match(/推定(\d+)人/)[1],
+  );
+  assert.ok(count > 0);
+  assert.equal(await interior.locator("circle").count(), count);
+  assert.equal(await interior.locator("rect.diagram-interior-door").count(), 4);
   await page.locator("#diagram-section").selectOption("1");
   assert.match(await segmentDetail.innerText(), /停車中/);
   assert.equal(await interior.count(), 0);
@@ -149,6 +173,8 @@ try {
   assert.equal(await displayDirection.inputValue(), "up");
   assert.equal(await strokeWidth.inputValue(), "4");
   await page.getByRole("link", { name: "データ設定" }).click();
+  assert.equal(await localCars.inputValue(), "8");
+  assert.equal(await rapidCars.inputValue(), "6");
   await page.getByRole("button", { name: "方面を追加" }).click();
   await page.getByPlaceholder("都心方面").fill("都心方面");
   await page.getByLabel("1日の流入", { exact: true }).fill("300");
@@ -264,7 +290,7 @@ try {
   const seated = await interior
     .locator("g.diagram-interior-seated circle")
     .count();
-  assert.ok(seated > 0 && seated <= 4);
+  assert.equal(seated, 2);
   assert.equal(
     await interior.locator("g.diagram-interior-standing circle").count(),
     0,

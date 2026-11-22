@@ -67,8 +67,9 @@ const num = (
   value: number | undefined,
   label: string,
   step = "any",
+  min = 0,
 ) =>
-  `<input name="${name}" aria-label="${e(label)}" type="number" min="0" max="1000000000" step="${step}" value="${value ?? ""}">`;
+  `<input name="${name}" aria-label="${e(label)}" type="number" min="${min}" max="1000000000" step="${step}" value="${value ?? ""}">`;
 
 function shareFields(shares: number[], prefix: string) {
   return `<div class="period-fields">${periods
@@ -287,18 +288,19 @@ export function settingsBody(p: Project, dia: Timetable, draft?: LineDemand) {
       <div id="outside-areas">${d.outside.map((area, i) => areaCard(p, dia, area, i)).join("")}</div>
     </section>
     <section class="surface">
-      <div class="section-heading"><div><h2>営業区分・輸送定員</h2><p class="muted">営業列車を検索・配分に使用します。定員は1編成あたりの人数です。</p></div><button type="button" data-action="all-passenger">未確認の種別を営業に設定</button></div>
+      <div class="section-heading"><div><h2>営業区分・輸送定員</h2><p class="muted">定員は1編成あたりの人数です。車内図では種別の編成両数を使い、列車別の編成両数があればそちらを優先します。</p></div><button type="button" data-action="all-passenger">未確認の種別を営業に設定</button></div>
       <div class="fields single-field">
         <label>乗車上限の混雑率（%）<input name="boarding-limit-percent" type="number" min="0" step="any" value="${d.boardingLimitPercent ?? ""}" placeholder="例：150" aria-describedby="boarding-limit-hint"></label>
       </div>
       <p id="boarding-limit-hint" class="muted">乗車上限は全日区分で共通です。空欄なら上限なし。指定の混雑率に達すると、乗り切れない利用者は目的地へ行ける後続便を待ちます。</p>
-      <div class="table-scroll"><table><thead><tr><th scope="col">列車種別</th><th scope="col">営業区分</th><th scope="col">輸送定員（人）</th></tr></thead>
+      <div class="table-scroll"><table><thead><tr><th scope="col">列車種別</th><th scope="col">営業区分</th><th scope="col">輸送定員（人）</th><th scope="col">編成両数</th></tr></thead>
       <tbody>${p.types
         .map((t, i) => {
           const state = p.serviceClasses?.types[t.id]?.state ?? "review";
           const capacity = p.capacitySettings?.types[t.id];
           return `<tr><th scope="row">${e(t.name)}</th><td><select name="class${i}" aria-label="${e(t.name)}の営業区分">${options(classOptions, state)}</select></td>
-        <td>${num("cap" + i, capacity?.kind === "transport" ? capacity.value : capacity ? undefined : p.typeCapacities?.[t.id], t.name + "の輸送定員", "1")}</td></tr>`;
+        <td>${num("cap" + i, capacity?.kind === "transport" ? capacity.value : capacity ? undefined : p.typeCapacities?.[t.id], t.name + "の輸送定員", "1")}</td>
+        <td>${num("type-cars" + i, t.carCount ?? capacity?.carCount, t.name + "の編成両数", "1", 1)}</td></tr>`;
         })
         .join("")}</tbody></table></div>
       <div class="fields single-field"><label>ダイヤ共通の輸送定員（人、任意）${num("default-cap", p.capacitySettings?.timetables[dia.id]?.kind === "transport" ? p.capacitySettings.timetables[dia.id].value : undefined, "ダイヤ共通の輸送定員", "1")}</label></div>
@@ -506,6 +508,12 @@ export function applyTrainSettings(
   };
   p.types.forEach((t, i) => {
     writeClass(classes.types, t.id, picked("class" + i));
+    const cars = picked("type-cars" + i);
+    if (cars) t.carCount = Number(cars);
+    else delete t.carCount;
+    // Move older type-level formation metadata into the editable type itself.
+    if (caps.types[t.id]?.carCount !== undefined)
+      delete caps.types[t.id].carCount;
     if (!picked("cap" + i) && p.typeCapacities) delete p.typeCapacities[t.id];
     writeCap(caps.types, t.id, "cap" + i);
   });

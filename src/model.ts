@@ -128,7 +128,7 @@ export interface Project {
   temporalConfig?: TemporalConfig;
   name: string;
   stations: Station[];
-  types: { id: string; name: string }[];
+  types: { id: string; name: string; carCount?: number }[];
   timetables: Timetable[];
   costs: Record<string, Record<string, number>>;
   parameters: Parameters;
@@ -221,6 +221,14 @@ export function validateProject(value: unknown): asserts value is Project {
     p.types.some((t) => !t.id || typeof t.name !== "string")
   )
     fail("種別ID不正");
+  if (
+    p.types.some(
+      ({ carCount }) =>
+        carCount !== undefined &&
+        (!Number.isSafeInteger(carCount) || carCount <= 0),
+    )
+  )
+    fail("種別の編成両数は1以上の整数を入力してください");
   const diaIds = new Set<string>();
   const positions = new Map(p.oud2?.positions.map((x) => [x.id, x]) ?? []);
   if (p.oud2) {

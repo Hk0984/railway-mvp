@@ -1,4 +1,4 @@
-import type { Project } from "./model";
+import type { Project, Train } from "./model";
 import { trainClassKey } from "./classification";
 import { operationGroup } from "./operation-numbers";
 export interface CapacitySpec {
@@ -52,6 +52,19 @@ export function transportCapacity(p: Project, diaId: string, trainId: string) {
   const spec = capacitySpec(p, diaId, trainId);
   return spec?.kind === "transport" ? spec.value : null;
 }
+
+export function trainCarCount(p: Project, diaId: string, train: Train) {
+  const c = p.capacitySettings;
+  const group = c?.operationGroups && operationGroup(p, train).group;
+  return (
+    c?.trains[trainClassKey(diaId, train.id)]?.carCount ??
+    (group ? c?.operationGroups?.[group]?.carCount : undefined) ??
+    p.types.find((type) => type.id === train.typeId)?.carCount ??
+    c?.types[train.typeId]?.carCount ??
+    c?.timetables[diaId]?.carCount
+  );
+}
+
 export function validateCapacitySettings(p: Project) {
   const c = p.capacitySettings;
   if (!c) return;

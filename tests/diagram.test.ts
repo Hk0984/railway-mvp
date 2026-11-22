@@ -13,17 +13,22 @@ import { parseOud2 } from "../src/oud2";
 import { readFileSync } from "node:fs";
 
 describe("列車ダイヤ図", () => {
-  it("shows seated and standing density and preserves the value beyond the drawing scale", () => {
-    expect(trainInterior(null, 200)).toBe("");
-    expect(trainInterior(0, 0)).toContain("座席に0点、通路に0点");
-    expect(trainInterior(28.7, 229.7)).toContain("座席に11点、通路に0点");
-    expect(trainInterior(100, 800)).toContain("座席に16点、通路に24点");
-    const crowded = trainInterior(230, 1840, 8);
-    expect(crowded).toContain("座席に16点、通路に76点");
+  it("draws one dot per estimated passenger in the displayed quarter car", () => {
+    expect(trainInterior(null, 800, 8)).toBe("");
+    expect(trainInterior(80, null, 8)).toBe("");
+    expect(trainInterior(80, 800)).toContain("編成両数を登録");
+    expect(trainInterior(0, 800, 8)).toContain("推定0人、着席0人、立席0人");
+    expect(trainInterior(229.7, 800, 8)).toContain("推定7人、着席7人、立席0人");
+    expect(trainInterior(229.7, 800, 4)).toContain(
+      "推定14人、着席14人、立席0人",
+    );
+    const crowded = trainInterior(1840, 800, 8);
+    expect(crowded).toContain("推定58人、着席10人、立席48人");
+    expect(crowded.match(/<circle/g)).toHaveLength(58);
     expect(crowded).toContain("1両あたり平均 230人");
-    const beyondLimit = trainInterior(410, 3280);
-    expect(beyondLimit).toContain("混雑率410%。座席に16点、通路に104点");
-    expect(beyondLimit).toContain("300%相当まで点で表示");
+    const veryCrowded = trainInterior(3280, 800, 8);
+    expect(veryCrowded).toContain("推定103人、着席10人、立席93人");
+    expect(veryCrowded.match(/<circle/g)).toHaveLength(103);
   });
 
   it("includes threshold endpoints and never assigns a band to missing values", () => {

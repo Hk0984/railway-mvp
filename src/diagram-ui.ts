@@ -2,7 +2,7 @@ import { diagramRoutes } from "./diagram-routes";
 import "./diagram.css";
 import { clock } from "./analysis";
 import type { AssignmentResult, DiagramAssignment } from "./assignment-model";
-import { capacitySpec } from "./capacity-model";
+import { capacitySpec, trainCarCount } from "./capacity-model";
 import { trainInterior } from "./diagram-interior";
 import { stationBoardingChart, trainChart } from "./diagram-train-chart";
 import { assignmentTransfers } from "./diagram-transfers";
@@ -377,6 +377,7 @@ export function mountDiagram(
       ? train.externalDestination.externalTime
       : (lastStop?.arrival ?? lastLine.end);
     const spec = capacitySpec(project, diaId, train.id);
+    const cars = trainCarCount(project, diaId, train);
     const known = segments.filter((s) => s.percent !== null);
     const max = known.reduce<DiagramSegment | undefined>(
       (best, s) => (!best || s.percent! > best.percent! ? s : best),
@@ -403,7 +404,7 @@ export function mountDiagram(
     detail.innerHTML = `<h3>列車情報</h3><p><strong>${e(train.number || train.id)}</strong> ／ ${e(type)} ／ ${train.direction === "down" ? "下り" : "上り"}</p>
       <p>${e(origin)} ${originTime === undefined ? "時刻不明" : clock(originTime)} →
       ${e(destination)} ${destinationTime === undefined ? "時刻不明" : clock(destinationTime)}</p>
-      <p>編成両数 ${spec?.carCount ? n(spec.carCount) + "両" : "未登録"}${spec?.vehicle ? " ／ " + e(spec.vehicle) : ""}</p>
+      <p>編成両数 ${cars ? n(cars, 0) + "両" : "未登録"}${spec?.vehicle ? " ／ " + e(spec.vehicle) : ""}</p>
       <p>推計延べ乗車 ${people(load?.totalBoardings)}</p>
       <p>平均混雑率 ${percent(avg)}（算出済み駅間の単純平均）</p>
       <p>最大混雑率 ${percent(max?.percent)}${max ? " ／ " + e(route(max)) : ""}</p>${chart}${boarding}`;
@@ -443,7 +444,7 @@ export function mountDiagram(
       <p>推定乗車人数 ${people(segment.passengers)} ／ 輸送力 ${people(capacity)}${capacity !== null && spec?.kind === "transport" ? "（" + e(spec.basis) + "）" : ""}</p>
       <p>混雑率 ${percent(segment.percent)} ／ ${status}</p>
       ${segment.untimedPasses ? `<p class="muted">時刻の記載がない通過駅　${segment.untimedPasses.map((s) => e(station(s.stationId))).join("、")}</p>` : ""}
-      ${trainInterior(segment.percent, segment.passengers, spec?.carCount)}`;
+      ${trainInterior(segment.passengers, capacity, trainCarCount(project, diaId, train))}`;
   }
 
   function selectTrain(id: string, segment?: DiagramSegment) {

@@ -1,99 +1,90 @@
 import { seatedCrowdingLimit } from "./diagram-model";
 import { numberText as n } from "./ui-utils";
 
-const marksAtCapacity = 40;
-const displayLimit = 300;
-const seatMarks = Math.round((seatedCrowdingLimit / 100) * marksAtCapacity);
-const doorCenters = [97, 243, 397, 543];
-const benches = [
-  { x: 30, width: 34, seats: 1 },
-  { x: 131, width: 77, seats: 2 },
-  { x: 277, width: 86, seats: 2 },
-  { x: 432, width: 77, seats: 2 },
-  { x: 576, width: 34, seats: 1 },
-];
-const benchY = [31, 147];
-const seatPositions = benches.flatMap(({ x, width, seats }) =>
-  Array.from({ length: seats }, (_, i) =>
-    benchY.map((y) => [x + ((i + 0.5) / seats) * width, y + 10]),
-  ).flat(),
-);
+const sectionsPerCar = 4;
+const maxVisiblePeople = 4096;
+const doorPositions = [81, 359];
+const benchY = [27, 159];
 
-const aisleColumns = 22;
-const aislePlaces = aisleColumns * 5;
-const standPositions = Array.from({ length: aislePlaces }, (_, i) => {
-  // Use a fixed order that spreads people along the carriage as density rises.
-  const place = (i * 37) % aislePlaces;
-  const row = Math.floor(place / aisleColumns);
-  const column = place % aisleColumns;
-  return [46 + 26 * column + (row % 2) * 5, 60 + 17 * row];
-});
+const dot = (x: number, y: number, radius: number) =>
+  `<circle cx="${x.toFixed(2)}" cy="${y.toFixed(2)}" r="${radius.toFixed(2)}"/>`;
 
 export function trainInterior(
-  percent: number | null,
   passengers: number | null,
+  capacity: number | null,
   carCount?: number,
 ) {
-  if (percent === null || !Number.isFinite(percent) || percent < 0) return "";
-  const count =
-    percent === 0
-      ? 0
-      : Math.max(
-          1,
-          Math.round((Math.min(percent, displayLimit) * marksAtCapacity) / 100),
-        );
-  const seated = Math.min(seatMarks, count);
+  if (passengers === null || capacity === null) return "";
+  if (!carCount)
+    return `<p class="muted">車内図を表示するには、<a href="#settings">データ設定</a>で編成両数を登録してください。</p>`;
+
+  const average = passengers / carCount;
+  const count = Math.round(average / sectionsPerCar);
+  const caption = `<figcaption><strong>車内のイメージ</strong><span>この範囲の推定 ${n(count, 0)}人</span><span class="muted">1両あたり平均 ${n(average)}人</span></figcaption>`;
+  if (count > maxVisiblePeople)
+    return `<figure class="diagram-interior">${caption}<p class="muted">点が判別できる密度を超えているため、人数のみ表示しています。</p></figure>`;
+
+  const seats = Math.round(
+    (capacity * seatedCrowdingLimit) / (100 * carCount * sectionsPerCar),
+  );
+  const seated = Math.min(seats, count);
   const standing = count - seated;
-  const marks = (positions: number[][], type: "seated" | "standing") =>
-    `<g class="diagram-interior-${type}">${positions
-      .map(([x, y]) => `<circle cx="${x}" cy="${y}" r="6"/>`)
-      .join("")}</g>`;
+  const seatsPerSide = Math.ceil(seats / 2);
+  const seatRadius = Math.min(6.5, 94 / seatsPerSide);
+  const seatDots = Array.from({ length: seated }, (_, i) => {
+    const side = i % 2;
+    const rowSeats = Math.floor((seats + 1 - side) / 2);
+    const rowPeople = Math.floor((seated + 1 - side) / 2);
+    const slot = Math.floor(((Math.floor(i / 2) + 0.5) * rowSeats) / rowPeople);
+    return dot(
+      117 + ((slot + 0.5) * 206) / rowSeats,
+      benchY[side] + 9,
+      seatRadius,
+    );
+  }).join("");
+
+  const columns = Math.max(20, Math.ceil(Math.sqrt(standing * 4)));
+  const rows = Math.max(5, Math.ceil(standing / columns));
+  const dx = 390 / columns;
+  const dy = 105 / rows;
+  const aisleRadius = Math.min(6.5, dx * 0.4, dy * 0.4);
+  const aisleDots = Array.from({ length: standing }, (_, i) => {
+    const columnIndex = i % columns;
+    const offset = Math.floor(columnIndex / 2);
+    const column = columnIndex % 2 === 0 ? offset : columns - 1 - offset;
+    const row = (Math.floor(i / columns) + column * 2 + 2) % rows;
+    return dot(25 + (column + 0.5) * dx, 49 + (row + 0.5) * dy, aisleRadius);
+  }).join("");
+
   return `<figure class="diagram-interior">
-    <figcaption><strong>車内のイメージ</strong>${
-      carCount && passengers !== null
-        ? `<span class="muted">1両あたり平均 ${n(passengers / carCount)}人</span>`
-        : ""
-    }</figcaption>
-    <svg viewBox="0 0 640 188" role="img" aria-label="混雑率${n(percent)}%。座席に${seated}点、通路に${standing}点を描いた車内の模式図">
-      <rect class="diagram-interior-shell" x="12" y="15" width="616" height="158" rx="25"/>
-      ${doorCenters
+    ${caption}
+    <svg viewBox="0 0 440 204" role="img" aria-label="ドア2か所とその間の車内の模式図。推定${count}人、着席${seated}人、立席${standing}人">
+      <rect class="diagram-interior-shell" x="12" y="13" width="416" height="178" rx="20"/>
+      ${doorPositions
         .map((x) =>
-          [15, 164]
+          [13, 181]
             .map(
               (y) =>
-                `<rect class="diagram-interior-door" x="${x - 20}" y="${y}" width="40" height="9" rx="2"/>
-        <path class="diagram-interior-door" d="M${x} ${y}v9"/>`,
+                `<rect class="diagram-interior-door" x="${x - 24}" y="${y}" width="48" height="10" rx="2"/>
+        <path class="diagram-interior-door" d="M${x} ${y}v10"/>`,
             )
             .join(""),
         )
         .join("")}
-      ${benches
-        .map(({ x, width }) =>
-          benchY
-            .map(
-              (y) =>
-                `<rect class="diagram-interior-seat" x="${x}" y="${y}" width="${width}" height="20" rx="5"/>`,
-            )
-            .join(""),
+      ${benchY
+        .map(
+          (y) =>
+            `<rect class="diagram-interior-seat" x="113" y="${y}" width="214" height="18" rx="5"/>`,
         )
         .join("")}
-      ${marks(
-        Array.from(
-          { length: seated },
-          (_, i) => seatPositions[(i * 5) % seatPositions.length],
-        ),
-        "seated",
-      )}
-      ${marks(standPositions.slice(0, standing), "standing")}
+      <g class="diagram-interior-seated">${seatDots}</g>
+      <g class="diagram-interior-standing">${aisleDots}</g>
     </svg>
-    <div class="diagram-interior-key" aria-hidden="true">
+    <div class="diagram-interior-key">
+      <strong>1点＝1人</strong>
       <span class="diagram-interior-seated">着席</span>
       <span class="diagram-interior-standing">立席</span>
     </div>
-    <p class="muted">輸送定員100%を${marksAtCapacity}点に換算した模式図です。座席は輸送定員の${seatedCrowdingLimit}%を想定しています。${
-      percent > displayLimit
-        ? `${displayLimit}%相当まで点で表示しています。`
-        : ""
-    }</p>
+    <p class="muted">ドア2か所とその間を1両の約4分の1として表示。乗客は各車両に均等に乗り、座席は輸送定員の${seatedCrowdingLimit}%と仮定しています。</p>
   </figure>`;
 }

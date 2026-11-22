@@ -8,7 +8,11 @@ import {
   type AssignmentConfig,
 } from "../src/assignment-model";
 import { validateProject, type Train, type Stop } from "../src/model";
-import { capacitySpec, transportCapacity } from "../src/capacity-model";
+import {
+  capacitySpec,
+  trainCarCount,
+  transportCapacity,
+} from "../src/capacity-model";
 const stop = (
   stationId: string,
   arrival?: number,
@@ -214,6 +218,31 @@ describe("定員制約の時系列配分", () => {
     validateProject(p);
     p.capacitySettings.trains['["d","a"]'].basis = "";
     expect(() => validateProject(p)).toThrow("根拠");
+  });
+  it("inherits the type's car count independently of the train's capacity", () => {
+    const a = train("a", 100, 200, 800);
+    const p = project([a]);
+    p.capacitySettings = {
+      timetables: {},
+      types: {
+        local: { kind: "transport", value: 600, basis: "種別", carCount: 6 },
+      },
+      trains: {},
+    };
+    expect(trainCarCount(p, "d", a)).toBe(6);
+    p.types[0].carCount = 8;
+    expect(trainCarCount(p, "d", a)).toBe(8);
+    expect(transportCapacity(p, "d", a.id)).toBe(800);
+    p.capacitySettings.trains['["d","a"]'] = {
+      kind: "transport",
+      value: 800,
+      basis: "列車別",
+      carCount: 10,
+    };
+    expect(trainCarCount(p, "d", a)).toBe(10);
+    validateProject(p);
+    p.types[0].carCount = 0;
+    expect(() => validateProject(p)).toThrow("種別の編成両数");
   });
   it("does not use non-passenger trains", () => {
     const a = train("a", 100, 200, 60),
