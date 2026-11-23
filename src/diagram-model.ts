@@ -12,6 +12,21 @@ export const crowdingColors = [
   "#d93042",
   "#903bbe",
 ];
+export const crowdingLabels = [
+  "全員着席レベル",
+  "比較的余裕あり",
+  "やや混雑",
+  "混雑",
+  "非常に混雑",
+  "極度の混雑",
+];
+
+export function crowdingRange(band: number, limits: readonly number[]) {
+  const high = limits[band - 1];
+  if (band === 0) return `${seatedCrowdingLimit}%未満`;
+  if (band === 1) return `${seatedCrowdingLimit}〜${high}%`;
+  return `${limits[band - 2]}%超${high === undefined ? "" : `〜${high}%`}`;
+}
 
 export function crowdingBand(
   percent: number | null,
@@ -34,6 +49,8 @@ export interface DiagramSegment {
   service: DiagramTrain;
   from: Stop;
   to: Stop;
+  fromIndex: number;
+  toIndex: number;
   start: number;
   end: number;
   kind: "run" | "dwell" | "gap" | "point";
@@ -75,6 +92,7 @@ export function diagramTrains(
   p: Project,
   diaId: string,
   result?: DiagramAssignment,
+  trainIds?: ReadonlySet<string>,
 ) {
   const destinationTiming = result?.diagnostics?.hourlyArrivals !== undefined;
   const capacityHorizon =
@@ -91,7 +109,7 @@ export function diagramTrains(
       .map((l) => [l.trainId, l]),
   );
   return (p.timetables.find((d) => d.id === diaId)?.trains ?? [])
-    .filter((t) => !t.cancelled)
+    .filter((t) => !t.cancelled && (!trainIds || trainIds.has(t.id)))
     .map((train): DiagramTrain => {
       const visits = trainVisits(train);
       const load = loads.get(train.id);
@@ -127,6 +145,8 @@ export function diagramTrains(
           service,
           from: visits[fromIndex],
           to: visits[toIndex],
+          fromIndex,
+          toIndex,
           start,
           end,
           kind,

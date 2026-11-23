@@ -8,7 +8,9 @@ import { stationBoardingChart, trainChart } from "./diagram-train-chart";
 import { assignmentTransfers } from "./diagram-transfers";
 import {
   crowdingColors,
+  crowdingLabels,
   crowdingLimits,
+  crowdingRange,
   diagramTrains,
   seatedCrowdingLimit,
   type DiagramSegment,
@@ -30,14 +32,6 @@ import { escapeHtml as e, numberText as n } from "./ui-utils";
 
 const routeSelection = new WeakMap<Project, number>();
 const storageKey = "railway-lab.diagram-haze";
-const bandLabels = [
-  "全員着席レベル",
-  "比較的余裕あり",
-  "やや混雑",
-  "混雑",
-  "非常に混雑",
-  "極度の混雑",
-];
 const defaultZoom = 640;
 const zoomLevels = [40, 80, 160, 320, defaultZoom];
 type DisplayDirection = Direction | "all";
@@ -195,11 +189,13 @@ export function mountDiagram(
       compact
         ? ""
         : `<details><summary>色としきい値を変更（段階式・アプリ独自の区分）</summary>
-      <div class="diagram-legend">${bandLabels.map((label, i) => {
-        const limitIndex = i - 1;
-        const limit = settings.limits[limitIndex];
-        return `<label>${label}<input type="color" aria-label="${label}の色" data-haze-color="${i}" value="${settings.colors[i]}">${limit === undefined ? "" : `<input type="number" min="${seatedCrowdingLimit}" step="any" aria-label="${label}の上限（%）" data-haze-limit="${limitIndex}" value="${limit}">%`}</label>`;
-      }).join("")}</div>
+      <div class="diagram-legend">${crowdingLabels
+        .map((label, i) => {
+          const limitIndex = i - 1;
+          const limit = settings.limits[limitIndex];
+          return `<label>${label}<input type="color" aria-label="${label}の色" data-haze-color="${i}" value="${settings.colors[i]}">${limit === undefined ? "" : `<input type="number" min="${seatedCrowdingLimit}" step="any" aria-label="${label}の上限（%）" data-haze-limit="${limitIndex}" value="${limit}">%`}</label>`;
+        })
+        .join("")}</div>
       <p id="diagram-setting-error" role="status"></p>
     </details>`
     }
@@ -473,15 +469,11 @@ export function mountDiagram(
   }
 
   function legend() {
-    find(".diagram-legend").innerHTML = bandLabels
-      .map((label, i) => {
-        const high = settings.limits[i - 1];
-        const range =
-          i === 0 ? `${seatedCrowdingLimit}%未満`
-          : i === 1 ? `${seatedCrowdingLimit}〜${high}%`
-          : `${settings.limits[i - 2]}%超${high === undefined ? "" : `〜${high}%`}`;
-        return `<span><span aria-hidden="true" style="color:${settings.colors[i]}">●</span> ${range} ${label}</span>`;
-      })
+    find(".diagram-legend").innerHTML = crowdingLabels
+      .map(
+        (label, i) =>
+          `<span><span aria-hidden="true" style="color:${settings.colors[i]}">●</span> ${crowdingRange(i, settings.limits)} ${label}</span>`,
+      )
       .join("");
   }
   legend();

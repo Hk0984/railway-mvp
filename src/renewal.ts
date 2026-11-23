@@ -130,10 +130,9 @@ function render() {
         <p class="context">${e(project.name)} <span aria-hidden="true">/</span> ${e(timetable.name)}${sample ? " · 架空サンプル" : ""}</p>
         <h1>${pages[page]}</h1>
       </div>${
-        page === "diagram"
+        page !== "settings"
           ? `<div class="heading-actions">
-        ${timetableField(project, diaId)}
-        ${demandDayField(project)}
+        ${page === "diagram" ? timetableField(project, diaId) + demandDayField(project) : ""}
         <span id="assignment-progress" role="status">${e(assignmentStatus)}</span>
         <button type="button" class="primary" data-action="${worker ? "cancel" : "calculate"}">${worker ? "計算を中止" : result ? "混雑を再計算" : "混雑を計算"}</button>
       </div>`
@@ -286,7 +285,7 @@ function search() {
       limit: 5,
     });
     target.innerHTML = journeys.length
-      ? `<h2 class="result-heading">経路候補 <small>${journeys.length}件${displayLimited ? "を表示" : ""}</small></h2>${journeyCards(project, journeys)}`
+      ? `<h2 class="result-heading">経路候補 <small>${journeys.length}件${displayLimited ? "を表示" : ""}</small></h2>${journeyCards(project, diaId, journeys, result)}`
       : `<p class="message">${e(reason)}</p>`;
   } catch (err) {
     target.innerHTML = `<p class="message error" role="alert">${e((err as Error).message)}</p>`;
@@ -460,14 +459,14 @@ function calculate() {
       result = data.results[0];
       assignmentStatus = "計算完了";
     }
-    if (page === "diagram") render();
+    if (page !== "settings") render();
     else refreshMessages();
   };
   current.onerror = () => {
     if (worker !== current) return;
     resetResult();
     error = "旅客配分を実行できませんでした。もう一度お試しください。";
-    if (page === "diagram") render();
+    if (page !== "settings") render();
     else refreshMessages();
   };
   current.postMessage({

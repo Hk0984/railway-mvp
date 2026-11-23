@@ -8,7 +8,8 @@ import {
   crowdingLimits,
   diagramTrains,
 } from "../src/diagram-model";
-import { buildRoutingIndex } from "../src/routing";
+import { buildRoutingIndex, searchJourneys } from "../src/routing";
+import { journeyCards } from "../src/renewal-route";
 import { sampleProject } from "../src/sample";
 import { parseOud2 } from "../src/oud2";
 import { readFileSync } from "node:fs";
@@ -276,6 +277,22 @@ describe("列車ダイヤ図", () => {
         percent: 75,
       });
       expect(afterTimedPass.untimedPasses).toBeUndefined();
+      const { journeys } = searchJourneys(index, {
+        origin: { datasetId, stationId: "s0" },
+        destination: { datasetId, stationId: "s4" },
+        time: 0,
+        mode: "depart",
+        sort: "arrival",
+        directOnly: true,
+        maxTransfers: 0,
+        minimumTransferSeconds: 60,
+      });
+      expect(journeys).toHaveLength(1);
+      const route = journeyCards(p, dia.id, journeys, result);
+      expect(route.match(/data-band="1"/g)).toHaveLength(1);
+      expect(route).toContain("比較的余裕あり <strong>75%</strong>");
+      expect(route).not.toContain("中央市");
+      expect(route).not.toContain("港ビジネス街");
     }
 
     train.stops[2].status = "stop";

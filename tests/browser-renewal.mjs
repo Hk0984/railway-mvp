@@ -25,11 +25,34 @@ try {
   await page.goto(process.env.RAILWAY_URL || "http://127.0.0.1:5173/");
   await page.getByRole("heading", { name: "乗換案内", exact: true }).waitFor();
   assert.equal(await page.locator("nav a").count(), 3);
+  assert.equal(
+    await page.getByRole("heading", { name: "路線の駅" }).count(),
+    0,
+  );
+  await page.locator('#journey-form input[name="time"]').fill("07:10");
   await page.getByRole("button", { name: "経路を検索" }).click();
-  await page.locator(".journey-card").first().waitFor();
-  assert.match(
-    await page.locator(".journey-card").first().innerText(),
-    /[0-9]{2}:[0-9]{2}/,
+  const firstJourney = page.locator(".journey-card").first();
+  await firstJourney.waitFor();
+  assert.match(await firstJourney.innerText(), /[0-9]{2}:[0-9]{2}/);
+  assert.deepEqual(
+    await firstJourney.locator(".journey-stop-name").allTextContents(),
+    ["緑丘ニュータウン", "中央市", "港ビジネス街", "東雲学園"],
+  );
+  const routeIntervals = firstJourney.locator(
+    ".journey-interval .journey-crowding",
+  );
+  assert.equal(await routeIntervals.count(), 3);
+  assert.match(await routeIntervals.first().innerText(), /未算出/);
+  await page.getByRole("button", { name: "混雑を計算", exact: true }).click();
+  await page.getByText("計算完了", { exact: true }).waitFor();
+  assert.equal(
+    await firstJourney.locator(".journey-interval [data-band]").count(),
+    3,
+  );
+  await page.getByText("駅間混雑の目安（6段階）", { exact: true }).click();
+  assert.equal(
+    await page.locator(".journey-crowding-legend li:visible").count(),
+    6,
   );
   // Previous releases stored haze preferences without direction or stroke width.
   await page.evaluate(() => {
@@ -69,8 +92,6 @@ try {
   const transferSeconds = page.getByLabel("最低乗換時間（秒）", {
     exact: true,
   });
-  await page.getByRole("button", { name: "混雑を計算" }).click();
-  await page.getByText("計算完了", { exact: true }).waitFor();
   await diagramTrain.selectOption("down-8");
   await section.selectOption("0");
   assert.equal(await interior.count(), 0);
