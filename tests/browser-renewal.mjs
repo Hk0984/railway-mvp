@@ -485,7 +485,7 @@ try {
         .decode(fixture)
         .replace(
           "Syubetsumei=普通",
-          "Syubetsumei=普通\nDiagramSenColor=00FE6100\nJikokuhyouMojiColor=00007700",
+          "Syubetsumei=普通\nDiagramSenColor=00FE6100\nJikokuhyouMojiColor=000076EC",
         ),
     ),
   });
@@ -526,8 +526,8 @@ try {
   const backup = await readFile(await download.path());
   const saved = JSON.parse(backup.toString("utf8"));
   assert.equal(saved.schemaVersion, 2);
-  assert.equal(saved.types[0].diagramColor, "#fe6100");
-  assert.equal(saved.types[0].timetableColor, "#007700");
+  assert.equal(saved.types[0].diagramColor, "#0061fe");
+  assert.equal(saved.types[0].timetableColor, "#ec7600");
   const importBackup = (name, buffer) =>
     page
       .locator("#open-file")

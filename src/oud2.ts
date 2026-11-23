@@ -23,9 +23,13 @@ const index = (raw: string, max: number, label: string) => {
 };
 
 function parseOudColor(value: string | undefined) {
-  // OuDia2nd stores RRGGBB after a reserved leading byte.
-  const match = /^[0-9a-f]{2}([0-9a-f]{6})$/i.exec(value ?? "");
-  return match ? `#${match[1].toLowerCase()}` : null;
+  // OuDia2nd serializes Windows COLORREF as 00BBGGRR. CSS uses #RRGGBB.
+  const match = /^[0-9a-f]{2}([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(
+    value ?? "",
+  );
+  if (!match) return null;
+  const [, blue, green, red] = match;
+  return `#${red}${green}${blue}`.toLowerCase();
 }
 
 export function parseOud2(

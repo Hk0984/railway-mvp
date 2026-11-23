@@ -16,7 +16,7 @@ function fixture({
   return `FileType=OuDiaSecond.1.17\nRosen.\nRosenmei=検証線\nEki.\nEkimei=甲\nOuterTerminal.\nOuterTerminalEkimei=路線外A\n.\n.\nEki.\nEkimei=乙\n${branch ? "BrunchCoreEkiIndex=0\n" : ""}OuterTerminal.\nOuterTerminalEkimei=路線外B\n.\n.\nRessyasyubetsu.\nSyubetsumei=普通\n.\nDia.\nDiaName=試験\n${up ? "Nobori" : "Kudari"}.\nRessya.\nSyubetsu=0\n${canceled ? "Canceled=1\n" : ""}EkiJikoku=${eki}\nOperation0B=${operation}\n.\nRessya.\n.\n.\n.\nKitenJikoku=400\n.\nDispProp.\nJikokuhyouFont=A\nJikokuhyouFont=B\n.\n`;
 }
 describe("実ファイルで確認した書式の回帰", () => {
-  it("round-trips separate OuDia2nd diagram and timetable colors", () => {
+  it("converts COLORREF to CSS for both type colors and round-trips via project JSON", () => {
     const { project, warnings } = parseOud2(
       fixture().replace(
         "Syubetsumei=普通",
@@ -27,8 +27,8 @@ describe("実ファイルで確認した書式の回帰", () => {
     expect(copy.schemaVersion).toBe(projectSchemaVersion);
     expect(() => validateProject(copy)).not.toThrow();
     expect(trainTypeColors(copy.types).get("0")).toEqual({
-      diagram: "#12cdef",
-      timetable: "#fe6100",
+      diagram: "#efcd12",
+      timetable: "#0061fe",
     });
     expect(warnings.join("\n")).not.toMatch(
       /DiagramSenColor|JikokuhyouMojiColor/,
