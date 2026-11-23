@@ -4,6 +4,10 @@
 
 日付は日本時間（JST）で記載します。記録は確認できたGitHubの変更内容に基づきます。
 
+## 2026-11-24 — Viteの脆弱性に対応
+
+- Viteを7.3.8に更新しました。[Vite公式のセキュリティ勧告](https://github.com/vitejs/vite/security/advisories/GHSA-p4f5-76q4-ffq7)
+
 ## 2026-11-24 — テスト用依存関係の脆弱性に対応
 
 - Vitestと `@vitest/mocker` を修正版の4.1.12に更新しました。更新後は、脆弱性が指摘された `tinypool` が依存関係から外れます。
