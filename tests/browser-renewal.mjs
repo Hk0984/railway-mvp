@@ -477,18 +477,19 @@ try {
   const fixture = await (
     await fetch(new URL("samples/basic-1.07.oud2", page.url()))
   ).arrayBuffer();
-  await page.locator("#open-file").setInputFiles({
-    name: "basic-1.07.oud2",
-    mimeType: "text/plain",
-    buffer: Buffer.from(
-      new TextDecoder()
-        .decode(fixture)
-        .replace(
-          "Syubetsumei=普通",
-          "Syubetsumei=普通\nDiagramSenColor=00FE6100\nJikokuhyouMojiColor=000076EC",
-        ),
-    ),
-  });
+  const oud = new TextDecoder()
+    .decode(fixture)
+    .replace(
+      "Syubetsumei=普通",
+      "Syubetsumei=普通\nDiagramSenColor=00FE6100\nJikokuhyouMojiColor=000076EC",
+    );
+  const openOud = (name, contents) =>
+    page.locator("#open-file").setInputFiles({
+      name,
+      mimeType: "text/plain",
+      buffer: Buffer.from(contents),
+    });
+  await openOud("basic-1.07.oud2", oud);
   await page.getByText("basic-1.07.oud2 を読み込みました").waitFor();
   await page.locator("#active-dia").selectOption("oud-dia1");
   await page.getByRole("link", { name: "混雑ダイヤ図" }).click();
@@ -555,6 +556,49 @@ try {
     .waitFor();
   assert.equal(await page.locator("#active-dia").inputValue(), "oud-dia1");
   assert.equal(await day.inputValue(), "holiday");
+  const revisedBoard = page.locator('[name="board0"]');
+  const capacity = page.locator('[name="cap0"]');
+  await revisedBoard.fill("1000");
+  await capacity.fill("600");
+  await page.locator('[name="class0"]').selectOption("passenger");
+  await page.getByRole("button", { name: "設定を保存", exact: true }).click();
+  await page.getByText("設定を保存しました", { exact: true }).waitFor();
+  const [settingsDownload] = await Promise.all([
+    page.waitForEvent("download"),
+    page.getByRole("button", { name: "設定のJSONを保存" }).click(),
+  ]);
+  const olderSettings = await readFile(await settingsDownload.path());
+
+  await revisedBoard.fill("1200");
+  await openOud(
+    "new-timetable.oud2",
+    oud.replace("235000,1;241000", "235500,1;241500"),
+  );
+  await page
+    .getByText(/駅利用者数などの設定を新しいダイヤに引き継ぎました/)
+    .waitFor();
+  assert.equal(await revisedBoard.inputValue(), "1200");
+  assert.equal(await capacity.inputValue(), "600");
+  assert.equal(await page.locator('[name="class0"]').inputValue(), "passenger");
+  assert.equal(await page.locator("#active-dia").inputValue(), "oud-dia1");
+  assert.equal(await day.inputValue(), "holiday");
+
+  await importBackup("old-timetable-settings.json", olderSettings);
+  await page.getByText(/現在のダイヤにJSONの設定を適用しました/).waitFor();
+  assert.equal(await revisedBoard.inputValue(), "1000");
+  assert.equal(await capacity.inputValue(), "600");
+  await page.reload();
+  assert.equal(await revisedBoard.inputValue(), "1000");
+  await page.getByRole("link", { name: "混雑ダイヤ図" }).click();
+  await page
+    .locator("#diagram-train")
+    .selectOption({ label: "201 ／ 普通 ／ 上り" });
+  await page.locator("#diagram-section").selectOption("0");
+  assert.match(
+    await page.locator("#diagram-segment-detail").innerText(),
+    /23:55–24:15/,
+  );
+
   assert.equal(
     await page.evaluate(() => localStorage.getItem("railway-lab-v1")),
     legacyStored,
@@ -567,7 +611,7 @@ try {
   );
   assert.deepEqual(errors, []);
   console.log(
-    "Renewal smoke passed: route, worker, haze, direction, stroke width, zoom scale, smoothed hourly destination arrivals, capacity limit, external trains, versioned JSON, OuDia2nd, midnight, mobile",
+    "Renewal smoke passed: route, worker, haze, direction, stroke width, zoom scale, smoothed hourly destination arrivals, capacity limit, external trains, versioned JSON, timetable updates, midnight, mobile",
   );
 } finally {
   await context.close();

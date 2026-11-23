@@ -229,7 +229,7 @@ export function settingsBody(p: Project, dia: Timetable, draft?: LineDemand) {
       : "boarding";
   return `
   <section class="surface timetable-settings">
-    <div class="section-heading"><div><h2>ダイヤデータ</h2><p class="muted">OuDia2ndの時刻表（.oud2）または種別色に対応した設定JSONを開きます。</p></div></div>
+    <div class="section-heading"><div><h2>ダイヤデータ</h2><p class="muted">駅順が同じ .oud2 には現在の設定を引き継ぎます。同じ駅順の設定JSONは、開いているダイヤに適用します。</p></div></div>
     <div class="fields">
       ${timetableField(p, dia.id)}
       ${demandDayField(p)}

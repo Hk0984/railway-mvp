@@ -46,6 +46,10 @@ import {
 import { sampleProject } from "./sample";
 import { tripPurposeLabels, tripPurposes } from "./station-demand-profile";
 import { hasLegacyProject, loadProject, saveProject } from "./storage";
+import {
+  sameStationOrder,
+  transferTimetableSettings,
+} from "./timetable-settings-transfer";
 import { escapeHtml as e, numberText as n, parseClock } from "./ui-utils";
 
 const pages = {
@@ -362,37 +366,72 @@ function go(next: Page) {
   window.scrollTo(0, 0);
 }
 
+function readSettingsForm(form: HTMLFormElement) {
+  const next = structuredClone(project);
+  setLineDemandForDay(next, readDemand(form, project, dia()));
+  applyTrainSettings(
+    form,
+    next,
+    next.timetables.find((d) => d.id === diaId)!,
+  );
+  return next;
+}
+
 async function openFile(input: HTMLInputElement) {
   const file = input.files?.[0];
   if (!file || loading) return;
-  if (hasUnsavedChanges()) {
-    input.value = "";
-    return;
-  }
   const encoding =
     document.querySelector<HTMLSelectElement>("#encoding")!.value;
   loading = true;
   try {
     if (file.size > 20 * 1024 * 1024) throw new Error("読み込み上限は20MBです");
-    let next: unknown;
-    if (/\.json$/i.test(file.name)) {
-      next = JSON.parse(await file.text());
+    const json = /\.json$/i.test(file.name);
+    let incoming: Project;
+    if (json) {
+      const content: unknown = JSON.parse(await file.text());
+      validateProject(content);
+      incoming = content;
     } else {
       const bytes = new Uint8Array(await file.arrayBuffer());
       const decoded = decodeOud2(bytes, encoding);
-      const imported = parseOud2(decoded.text).project;
-      imported.oud2!.encoding = decoded.encoding;
-      next = imported;
+      incoming = parseOud2(decoded.text).project;
+      incoming.oud2!.encoding = decoded.encoding;
     }
-    setProject(next);
+    if (!input.isConnected) return;
+
+    const sameLine = sameStationOrder(project, incoming);
+    if ((json || !sameLine) && hasUnsavedChanges()) return;
+    let merged: ReturnType<typeof transferTimetableSettings> | undefined;
+    if (sameLine && json) {
+      merged = transferTimetableSettings(project, incoming, {
+        currentTimetableId: diaId,
+      });
+    } else if (sameLine) {
+      let settings = project;
+      if (dirty) {
+        const form = app.querySelector<HTMLFormElement>("#settings-form")!;
+        if (!form.reportValidity())
+          throw new Error("未保存のデータ設定の入力内容を確認してください。");
+        settings = readSettingsForm(form);
+        validateProject(settings);
+      }
+      merged = transferTimetableSettings(incoming, settings);
+    }
+    setProject(merged?.project ?? incoming);
     page = "settings";
     notice = `${file.name} を読み込みました`;
-    error = "";
+    if (merged)
+      notice += json
+        ? "。現在のダイヤにJSONの設定を適用しました。"
+        : "。駅利用者数などの設定を新しいダイヤに引き継ぎました。";
+    error = merged?.skipped
+      ? `対応を確認できなかった設定が ${merged.skipped} 件あります。種別別・列車別の設定や路線外方面の指定を確認してください。`
+      : "";
     render();
   } catch (err) {
     fail(err);
-    input.value = "";
   } finally {
+    input.value = "";
     loading = false;
   }
 }
@@ -493,13 +532,7 @@ app.addEventListener("submit", (event) => {
     search();
   } else if (form.id === "settings-form") {
     try {
-      const next = structuredClone(project);
-      setLineDemandForDay(next, readDemand(form, project, dia()));
-      applyTrainSettings(
-        form,
-        next,
-        next.timetables.find((d) => d.id === diaId)!,
-      );
+      const next = readSettingsForm(form);
       validateProject(next);
       const nextDemand = estimateLineDemand(next, diaId);
       project = next;
