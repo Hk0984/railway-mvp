@@ -4,6 +4,7 @@ import { parseOudTime, decodeOud2 } from "../src/oud2-text";
 import { directTrains, stationDepartures, trainVisits } from "../src/analysis";
 import { timetableCosts } from "../src/demand";
 import { validateProject } from "../src/model";
+import { trainTypeColors } from "../src/train-type-colors";
 
 function fixture({
   up = false,
@@ -15,6 +16,44 @@ function fixture({
   return `FileType=OuDiaSecond.1.17\nRosen.\nRosenmei=検証線\nEki.\nEkimei=甲\nOuterTerminal.\nOuterTerminalEkimei=路線外A\n.\n.\nEki.\nEkimei=乙\n${branch ? "BrunchCoreEkiIndex=0\n" : ""}OuterTerminal.\nOuterTerminalEkimei=路線外B\n.\n.\nRessyasyubetsu.\nSyubetsumei=普通\n.\nDia.\nDiaName=試験\n${up ? "Nobori" : "Kudari"}.\nRessya.\nSyubetsu=0\n${canceled ? "Canceled=1\n" : ""}EkiJikoku=${eki}\nOperation0B=${operation}\n.\nRessya.\n.\n.\n.\nKitenJikoku=400\n.\nDispProp.\nJikokuhyouFont=A\nJikokuhyouFont=B\n.\n`;
 }
 describe("実ファイルで確認した書式の回帰", () => {
+  it("round-trips separate OuDia2nd diagram and timetable colors", () => {
+    const { project, warnings } = parseOud2(
+      fixture().replace(
+        "Syubetsumei=普通",
+        "Syubetsumei=普通\nDiagramSenColor=0012CDef\nJikokuhyouMojiColor=00FE6100",
+      ),
+    );
+    const copy = JSON.parse(JSON.stringify(project));
+    expect(() => validateProject(copy)).not.toThrow();
+    expect(trainTypeColors(copy.types).get("0")).toEqual({
+      diagram: "#12cdef",
+      timetable: "#fe6100",
+    });
+    expect(warnings.join("\n")).not.toMatch(
+      /DiagramSenColor|JikokuhyouMojiColor/,
+    );
+    copy.types[0].diagramColor = "red;display:none";
+    expect(() => validateProject(copy)).toThrow("種別色");
+  });
+
+  it("retains legacy files and uses the available color when only one is set", () => {
+    const { project, warnings } = parseOud2(
+      fixture().replace(
+        "Syubetsumei=普通",
+        "Syubetsumei=普通\nDiagramSenColor=invalid\nJikokuhyouMojiColor=00000000",
+      ),
+    );
+    expect(warnings.join("\n")).toContain("色に未対応の書式");
+    expect(trainTypeColors(project.types).get("0")).toEqual({
+      diagram: "#000000",
+      timetable: "#000000",
+    });
+    expect(parseOud2(fixture()).project.types[0]).toEqual({
+      id: "0",
+      name: "普通",
+    });
+  });
+
   it("keeps scoped external origins without adding OD stations", () => {
     const p = parseOud2(fixture()).project;
     const t = p.timetables[0].trains[0];

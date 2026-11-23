@@ -13,6 +13,7 @@ import { legPresentation } from "./route-presentation";
 import { escapeHtml as e, numberText as n } from "./ui-utils";
 import type { Journey, JourneyLeg } from "./routing-model";
 import { options } from "./renewal-settings";
+import { defaultTrainTypeColor, trainTypeColors } from "./train-type-colors";
 
 export interface RouteForm {
   origin: string;
@@ -131,6 +132,7 @@ export function journeyCards(
   result?: DiagramAssignment,
 ) {
   const names = new Map(project.stations.map((s) => [s.id, s.name]));
+  const colors = trainTypeColors(project.types);
   const station = (id: string) => names.get(id) ?? id;
   const byTrain = new Map<string, Map<number, KnownRun>>();
   if (result) {
@@ -168,9 +170,11 @@ export function journeyCards(
       <ol class="journey-legs">${j.legs
         .map((leg, i) => {
           const view = legPresentation(project, leg);
+          const color =
+            colors.get(leg.typeId)?.timetable ?? defaultTrainTypeColor;
           return `<li>
           ${i > 0 ? `<p class="transfer-note">乗換待ち ${n(j.transfers[i - 1].waitingSeconds / 60)}分</p>` : ""}
-          <p class="journey-train">${e(leg.typeName)} <span>${e(view.destination)} 行</span>${leg.trainNumber ? ` <small>${e(leg.trainNumber)}</small>` : ""}</p>
+          <p class="journey-train"><strong class="journey-type" style="--type-color:${color}">${e(leg.typeName)}</strong> <span>${e(view.destination)} 行</span>${leg.trainNumber ? ` <small>${e(leg.trainNumber)}</small>` : ""}</p>
           ${timetableStops(leg, view, station, byTrain.get(leg.trainId))}
         </li>`;
         })

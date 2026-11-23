@@ -5,20 +5,11 @@ export const plotLeft = 115;
 export const plotTop = 29;
 export const rowHeight = 30;
 const hour = 3600;
-const typeColors = [
-  "#244b58",
-  "#285fa2",
-  "#91452e",
-  "#64517c",
-  "#406336",
-  "#8a3e65",
-];
-
 export interface PlotLine {
   segment: DiagramSegment;
   y1: number;
   y2: number;
-  type: number;
+  color: string;
 }
 export interface VisibleLine extends PlotLine {
   x1: number;
@@ -94,7 +85,7 @@ export function drawDiagram(
     plotLeft + ((time - start) / hour) * pixelsPerHour - left;
   const visible: VisibleLine[] = [];
   const margin = settings.enabled ? settings.width : 4;
-  const tracks = typeColors.map(() => new Path2D());
+  const tracks = new Map<string, Path2D>();
   const hazeKey =
     settings.enabled && (!settings.selectedOnly || selected)
       ? JSON.stringify([
@@ -129,7 +120,13 @@ export function drawDiagram(
     const positioned = { ...line, x1, x2 };
     visible.push(positioned);
     const gap = line.segment.kind === "gap";
-    strokeLine(gap ? gaps : tracks[line.type % tracks.length], positioned, top);
+    if (gap) {
+      strokeLine(gaps, positioned, top);
+    } else {
+      let track = tracks.get(line.color);
+      if (!track) tracks.set(line.color, (track = new Path2D()));
+      strokeLine(track, positioned, top);
+    }
     const active = line.segment.service.train.id === selected;
     if (active) strokeLine(gap ? highlightGaps : highlight, positioned, top);
     if (line.segment === selectedSegment && !gap)
@@ -202,8 +199,8 @@ export function drawDiagram(
 
   ctx.lineCap = "round";
   ctx.lineWidth = settings.lineWidth;
-  tracks.forEach((path, i) => {
-    ctx.strokeStyle = typeColors[i];
+  tracks.forEach((path, color) => {
+    ctx.strokeStyle = color;
     ctx.stroke(path);
   });
   ctx.setLineDash([3, 4]);
@@ -213,7 +210,7 @@ export function drawDiagram(
   if (selected) {
     const line = visible.find((v) => v.segment.service.train.id === selected);
     if (line) {
-      ctx.strokeStyle = typeColors[line.type % typeColors.length];
+      ctx.strokeStyle = line.color;
       ctx.lineWidth = settings.lineWidth + 1.4;
       ctx.stroke(highlight);
       ctx.setLineDash([3, 4]);
@@ -222,7 +219,7 @@ export function drawDiagram(
       ctx.lineWidth = settings.lineWidth + 2.8;
       ctx.stroke(focus);
       ctx.font = "bold 12px sans-serif";
-      ctx.fillStyle = ctx.strokeStyle;
+      ctx.fillStyle = "#253741";
       const t = line.segment.service.train;
       const labelX = Math.max(plotLeft + 4, Math.min(width - 55, line.x1 + 4));
       const labelY = Math.max(plotTop + 13, line.y1 - top - 5);

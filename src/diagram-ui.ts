@@ -28,6 +28,7 @@ import {
   type VisibleLine,
 } from "./diagram-render";
 import type { Direction, Project } from "./model";
+import { defaultTrainTypeColor, trainTypeColors } from "./train-type-colors";
 import { escapeHtml as e, numberText as n } from "./ui-utils";
 
 const routeSelection = new WeakMap<Project, number>();
@@ -125,6 +126,7 @@ export function mountDiagram(
     });
   const names = new Map(project.stations.map((s) => [s.id, s.name]));
   const types = new Map(project.types.map((t, i) => [t.id, i]));
+  const colors = trainTypeColors(project.types);
   const transfers =
     result &&
     ("allocations" in result ? assignmentTransfers(result) : result.transfers);
@@ -244,6 +246,8 @@ export function mountDiagram(
         service.train.direction !== settings.direction
       )
         continue;
+      const color =
+        colors.get(service.train.typeId)?.diagram ?? defaultTrainTypeColor;
       let hasLine = false;
       for (const segment of service.segments) {
         const y1 = rows.get(segment.from.stationId);
@@ -259,7 +263,7 @@ export function mountDiagram(
           segment,
           y1,
           y2,
-          type: types.get(service.train.typeId) ?? 0,
+          color,
         });
       }
       if (hasLine) shown.push(service.train);

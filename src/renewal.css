@@ -609,8 +609,14 @@ th small {
 }
 .journey-train {
   margin: 0.1rem 0 0.5rem;
-  border-left: 3px solid #238572;
-  padding-left: 0.8rem;
+}
+.journey-type {
+  display: inline-block;
+  padding: 0.12rem 0.55rem;
+  margin-inline-end: 0.25rem;
+  border-inline-start: 4px solid var(--type-color);
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--type-color) 12%, #fff);
 }
 .journey-train span {
   color: var(--muted);

@@ -113,6 +113,14 @@ export interface Parameters {
   studentWeight: number;
   attractionWeight: number;
 }
+export interface TrainType {
+  id: string;
+  name: string;
+  carCount?: number;
+  diagramColor?: string;
+  timetableColor?: string;
+}
+
 export interface Project {
   schemaVersion: 1;
   datasetId?: string;
@@ -128,7 +136,7 @@ export interface Project {
   temporalConfig?: TemporalConfig;
   name: string;
   stations: Station[];
-  types: { id: string; name: string; carCount?: number }[];
+  types: TrainType[];
   timetables: Timetable[];
   costs: Record<string, Record<string, number>>;
   parameters: Parameters;
@@ -229,6 +237,13 @@ export function validateProject(value: unknown): asserts value is Project {
     )
   )
     fail("種別の編成両数は1以上の整数を入力してください");
+  for (const { diagramColor, timetableColor } of p.types)
+    for (const color of [diagramColor, timetableColor])
+      if (
+        color !== undefined &&
+        (typeof color !== "string" || !/^#[0-9a-f]{6}$/i.test(color))
+      )
+        fail("種別色は #RRGGBB 形式で入力してください");
   const diaIds = new Set<string>();
   const positions = new Map(p.oud2?.positions.map((x) => [x.id, x]) ?? []);
   if (p.oud2) {

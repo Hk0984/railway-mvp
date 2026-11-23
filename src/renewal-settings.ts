@@ -237,6 +237,11 @@ export function settingsBody(p: Project, dia: Timetable, draft?: LineDemand) {
       <label class="file-pick">ファイルを開く<input type="file" id="open-file" accept=".oud2,.json"></label>
     </div>
     <div class="inline-actions"><button type="button" data-action="export">設定のJSONを保存</button><button type="button" data-action="sample">サンプルを開く</button></div>
+    <details>
+      <summary>種別色だけ読み込む</summary>
+      <p class="muted">現在のダイヤと需要設定を使い、元のOuDia2ndファイルから種別色を追加・更新します。</p>
+      <label>元のOuDia2ndファイル <input type="file" id="type-colors-file" accept=".oud2"></label>
+    </details>
     ${p.oud2?.warnings.length ? `<details><summary>取り込み時の注意（${p.oud2.warnings.length}件）</summary><ul>${p.oud2.warnings.map((v) => `<li>${e(v)}</li>`).join("")}</ul></details>` : ""}
   </section>
   <form id="settings-form">

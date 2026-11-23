@@ -401,6 +401,51 @@ async function openFile(input: HTMLInputElement) {
   }
 }
 
+async function openTypeColors(input: HTMLInputElement) {
+  const file = input.files?.[0];
+  if (!file || loading) return;
+  const current = project;
+  const encoding =
+    document.querySelector<HTMLSelectElement>("#encoding")!.value;
+  loading = true;
+  try {
+    if (file.size > 20 * 1024 * 1024) throw new Error("読み込み上限は20MBです");
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    if (current !== project) return;
+    const imported = parseOud2(decodeOud2(bytes, encoding).text).project;
+    const byId = new Map(imported.types.map((type) => [type.id, type]));
+    let matched = 0;
+    const types = project.types.map((type) => {
+      const source = byId.get(type.id);
+      if (!source || source.name !== type.name) return type;
+      const { diagramColor, timetableColor } = source;
+      if (!diagramColor && !timetableColor) return type;
+      matched++;
+      return {
+        ...type,
+        ...(diagramColor && { diagramColor }),
+        ...(timetableColor && { timetableColor }),
+      };
+    });
+    if (!matched)
+      throw new Error(
+        "現在のデータと一致する種別色が見つかりませんでした。元のOuDia2ndファイルを選んでください。",
+      );
+    project.types = types;
+    notice = `${matched}種別の色を読み込みました`;
+    error = "";
+    persist();
+    // Keep the settings form mounted so any unsaved input is preserved.
+    if (page === "settings") refreshMessages();
+    else render();
+  } catch (err) {
+    fail(err);
+  } finally {
+    loading = false;
+    input.value = "";
+  }
+}
+
 function calculate() {
   if (worker) return;
   const totals = classificationCounts(project, diaId);
@@ -543,6 +588,7 @@ app.addEventListener("input", (event) => {
 app.addEventListener("change", (event) => {
   const input = event.target as HTMLInputElement;
   if (input.id === "open-file") void openFile(input);
+  if (input.id === "type-colors-file") void openTypeColors(input);
   if (input.id === "active-dia" || input.id === "active-demand-day") {
     const switchDay = input.id === "active-demand-day";
     const oldDay = activeDemandDay(project);

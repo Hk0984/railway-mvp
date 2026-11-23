@@ -21,6 +21,12 @@ const index = (raw: string, max: number, label: string) => {
   return Number(raw);
 };
 
+function parseOudColor(value: string | undefined) {
+  // OuDia2nd stores RRGGBB after a reserved leading byte.
+  const match = /^[0-9a-f]{2}([0-9a-f]{6})$/i.exec(value ?? "");
+  return match ? `#${match[1].toLowerCase()}` : undefined;
+}
+
 export function parseOud2(
   text: string,
   options: Oud2Options = {},
@@ -53,7 +59,13 @@ export function parseOud2(
       "OuterTerminalJikokuRyaku",
       "OuterTerminalDiaRyaku",
     ],
-    Ressyasyubetsu: ["Syubetsumei", "Ryakusyou", "Hidden"],
+    Ressyasyubetsu: [
+      "Syubetsumei",
+      "Ryakusyou",
+      "Hidden",
+      "DiagramSenColor",
+      "JikokuhyouMojiColor",
+    ],
     Dia: ["DiaName"],
     Kudari: [],
     Nobori: [],
@@ -195,7 +207,21 @@ export function parseOud2(
       warnings.add(
         "隠し種別も登録列車として保持します。旅客営業の可否は種別名から推測しません",
       );
-    return { id: String(i), name: n.values.Syubetsumei };
+    const diagramColor = parseOudColor(n.values.DiagramSenColor);
+    const timetableColor = parseOudColor(n.values.JikokuhyouMojiColor);
+    if (
+      (n.values.DiagramSenColor !== undefined && !diagramColor) ||
+      (n.values.JikokuhyouMojiColor !== undefined && !timetableColor)
+    )
+      warnings.add(
+        `種別「${n.values.Syubetsumei}」の色に未対応の書式があります`,
+      );
+    return {
+      id: String(i),
+      name: n.values.Syubetsumei,
+      ...(diagramColor && { diagramColor }),
+      ...(timetableColor && { timetableColor }),
+    };
   });
   let emptyColumns = 0,
     overnightTimes = 0;
