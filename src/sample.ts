@@ -1,4 +1,4 @@
-import { defaultParameters, type Project } from "./model";
+import { defaultParameters, projectSchemaVersion, type Project } from "./model";
 export function sampleProject(): Project {
   const stations = [
     ["緑丘ニュータウン", 42000, 2200, 600, 900],
@@ -47,7 +47,7 @@ export function sampleProject(): Project {
     for (let j = 0; j < 5; j++) costs[`s${i}`][`s${j}`] = Math.abs(i - j) * 7;
   }
   return {
-    schemaVersion: 1,
+    schemaVersion: projectSchemaVersion,
     datasetId: "sample-mirai",
     serviceClasses: {
       types: {
@@ -65,8 +65,18 @@ export function sampleProject(): Project {
     name: "みらい都市鉄道",
     stations,
     types: [
-      { id: "local", name: "普通" },
-      { id: "rapid", name: "快速" },
+      {
+        id: "local",
+        name: "普通",
+        diagramColor: "#244b58",
+        timetableColor: "#244b58",
+      },
+      {
+        id: "rapid",
+        name: "快速",
+        diagramColor: "#285fa2",
+        timetableColor: "#285fa2",
+      },
     ],
     timetables: [{ id: "weekday", name: "平日・サンプル", trains }],
     costs,

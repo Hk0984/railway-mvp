@@ -1,5 +1,6 @@
-import { validateProject, type Project } from "./model";
+import { projectSchemaVersion, validateProject, type Project } from "./model";
 import { validateWorkspace, type Workspace } from "./workspace";
+const projectKey = `railway-lab-v${projectSchemaVersion}`;
 const revisions = new Map<string, number>();
 async function saveValue(key: string, value: unknown) {
   const revision = (revisions.get(key) ?? 0) + 1;
@@ -35,11 +36,13 @@ async function loadValue(key: string) {
   }
   return value;
 }
-export const saveProject = (p: Project) => saveValue("railway-lab-v1", p);
+export const saveProject = (p: Project) => saveValue(projectKey, p);
+export const hasLegacyProject = () =>
+  localStorage.getItem("railway-lab-v1") !== null;
 export const saveWorkspace = (w: Workspace) =>
   saveValue("railway-workspace-v1", w);
 export async function loadProject(): Promise<Project | null> {
-  const p = await loadValue("railway-lab-v1");
+  const p = await loadValue(projectKey);
   if (p) validateProject(p);
   return p;
 }

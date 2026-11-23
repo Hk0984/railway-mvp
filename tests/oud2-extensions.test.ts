@@ -3,7 +3,7 @@ import { parseOud2 } from "../src/oud2";
 import { parseOudTime, decodeOud2 } from "../src/oud2-text";
 import { directTrains, stationDepartures, trainVisits } from "../src/analysis";
 import { timetableCosts } from "../src/demand";
-import { validateProject } from "../src/model";
+import { projectSchemaVersion, validateProject } from "../src/model";
 import { trainTypeColors } from "../src/train-type-colors";
 
 function fixture({
@@ -24,6 +24,7 @@ describe("実ファイルで確認した書式の回帰", () => {
       ),
     );
     const copy = JSON.parse(JSON.stringify(project));
+    expect(copy.schemaVersion).toBe(projectSchemaVersion);
     expect(() => validateProject(copy)).not.toThrow();
     expect(trainTypeColors(copy.types).get("0")).toEqual({
       diagram: "#12cdef",
@@ -36,7 +37,18 @@ describe("実ファイルで確認した書式の回帰", () => {
     expect(() => validateProject(copy)).toThrow("種別色");
   });
 
-  it("retains legacy files and uses the available color when only one is set", () => {
+  it("rejects legacy JSON and incomplete color records in the new format", () => {
+    const { project } = parseOud2(fixture());
+    expect(() => validateProject({ ...project, schemaVersion: 1 })).toThrow(
+      "旧形式のJSON",
+    );
+    const { id, name, diagramColor } = project.types[0];
+    expect(() =>
+      validateProject({ ...project, types: [{ id, name, diagramColor }] }),
+    ).toThrow("時刻表文字色");
+  });
+
+  it("records unconfigured OuDia2nd colors explicitly and uses the available color", () => {
     const { project, warnings } = parseOud2(
       fixture().replace(
         "Syubetsumei=普通",
@@ -51,6 +63,8 @@ describe("実ファイルで確認した書式の回帰", () => {
     expect(parseOud2(fixture()).project.types[0]).toEqual({
       id: "0",
       name: "普通",
+      diagramColor: null,
+      timetableColor: null,
     });
   });
 

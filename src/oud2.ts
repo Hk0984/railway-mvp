@@ -1,5 +1,6 @@
 ﻿import {
   defaultParameters,
+  projectSchemaVersion,
   validateProject,
   type Project,
   type RoutePosition,
@@ -24,7 +25,7 @@ const index = (raw: string, max: number, label: string) => {
 function parseOudColor(value: string | undefined) {
   // OuDia2nd stores RRGGBB after a reserved leading byte.
   const match = /^[0-9a-f]{2}([0-9a-f]{6})$/i.exec(value ?? "");
-  return match ? `#${match[1].toLowerCase()}` : undefined;
+  return match ? `#${match[1].toLowerCase()}` : null;
 }
 
 export function parseOud2(
@@ -219,8 +220,8 @@ export function parseOud2(
     return {
       id: String(i),
       name: n.values.Syubetsumei,
-      ...(diagramColor && { diagramColor }),
-      ...(timetableColor && { timetableColor }),
+      diagramColor,
+      timetableColor,
     };
   });
   let emptyColumns = 0,
@@ -409,7 +410,7 @@ export function parseOud2(
       `未解析設定 ${label}（${count}件）：描画・表示等の設定は解析に利用しません`,
     );
   const project: Project = {
-    schemaVersion: 1,
+    schemaVersion: projectSchemaVersion,
     name: rosen.values.Rosenmei ?? "名称なし路線",
     stations,
     types,

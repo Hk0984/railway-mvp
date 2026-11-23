@@ -117,12 +117,14 @@ export interface TrainType {
   id: string;
   name: string;
   carCount?: number;
-  diagramColor?: string;
-  timetableColor?: string;
+  diagramColor: string | null;
+  timetableColor: string | null;
 }
 
+export const projectSchemaVersion = 2;
+
 export interface Project {
-  schemaVersion: 1;
+  schemaVersion: typeof projectSchemaVersion;
   datasetId?: string;
   lineDemand?: LineDemand;
   lineDemandByDay?: LineDemandByDay;
@@ -141,7 +143,6 @@ export interface Project {
   costs: Record<string, Record<string, number>>;
   parameters: Parameters;
   demands: Demand[];
-  /** Optional metadata leaves initial schemaVersion 1 files valid. */
   oud2?: {
     fileType: string;
     encoding?: string;
@@ -167,9 +168,13 @@ export function validateProject(value: unknown): asserts value is Project {
   const fail = (s: string): never => {
     throw new Error(`データ検証: ${s}`);
   };
+  if ((value as { schemaVersion?: number } | null)?.schemaVersion === 1)
+    fail(
+      "旧形式のJSONです。元のOuDia2ndファイル（.oud2）を開き、設定を新形式で保存してください。",
+    );
+  if (p?.schemaVersion !== projectSchemaVersion)
+    fail("種別色に対応した新形式のプロジェクトJSONが必要です");
   if (
-    !p ||
-    p.schemaVersion !== 1 ||
     typeof p.name !== "string" ||
     !Array.isArray(p.stations) ||
     p.stations.length < 2 ||
@@ -180,7 +185,7 @@ export function validateProject(value: unknown): asserts value is Project {
     !p.costs ||
     !p.parameters
   )
-    fail("schemaVersion=1 のプロジェクトが必要です");
+    fail("プロジェクトJSONに必要な項目がありません");
   const ids = new Set<string>();
   const nonnegative = (n: unknown) =>
     typeof n === "number" && Number.isFinite(n) && n >= 0;
@@ -240,10 +245,12 @@ export function validateProject(value: unknown): asserts value is Project {
   for (const { diagramColor, timetableColor } of p.types)
     for (const color of [diagramColor, timetableColor])
       if (
-        color !== undefined &&
+        color !== null &&
         (typeof color !== "string" || !/^#[0-9a-f]{6}$/i.test(color))
       )
-        fail("種別色は #RRGGBB 形式で入力してください");
+        fail(
+          "種別色にはダイヤ線色と時刻表文字色が必要です（#RRGGBB、未設定はnull）",
+        );
   const diaIds = new Set<string>();
   const positions = new Map(p.oud2?.positions.map((x) => [x.id, x]) ?? []);
   if (p.oud2) {

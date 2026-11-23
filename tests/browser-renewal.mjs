@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { chromium } from "playwright-core";
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -24,6 +24,13 @@ try {
   page.on("pageerror", (error) => errors.push(error.message));
   await page.goto(process.env.RAILWAY_URL || "http://127.0.0.1:5173/");
   await page.getByRole("heading", { name: "乗換案内", exact: true }).waitFor();
+  const legacyStored = '{"schemaVersion":1,"name":"旧形式のブラウザ保存"}';
+  await page.evaluate(
+    (value) => localStorage.setItem("railway-lab-v1", value),
+    legacyStored,
+  );
+  await page.reload();
+  await page.getByText(/ブラウザに旧形式の設定が残っています/).waitFor();
   assert.equal(await page.locator("nav a").count(), 3);
   assert.equal(
     await page.getByRole("heading", { name: "路線の駅" }).count(),
@@ -473,7 +480,14 @@ try {
   await page.locator("#open-file").setInputFiles({
     name: "basic-1.07.oud2",
     mimeType: "text/plain",
-    buffer: Buffer.from(fixture),
+    buffer: Buffer.from(
+      new TextDecoder()
+        .decode(fixture)
+        .replace(
+          "Syubetsumei=普通",
+          "Syubetsumei=普通\nDiagramSenColor=00FE6100\nJikokuhyouMojiColor=00007700",
+        ),
+    ),
   });
   await page.getByText("basic-1.07.oud2 を読み込みました").waitFor();
   await page.locator("#active-dia").selectOption("oud-dia1");
@@ -499,6 +513,52 @@ try {
   assert.deepEqual(await trainChoices(), []);
   await displayDirection.selectOption("all");
   assert.deepEqual(await trainChoices(), ["oud-1-Nobori-0"]);
+  await page.getByRole("link", { name: "データ設定" }).click();
+  assert.equal(
+    await page.getByText("種別色だけ読み込む", { exact: true }).count(),
+    0,
+  );
+  const [download] = await Promise.all([
+    page.waitForEvent("download"),
+    page.getByRole("button", { name: "設定のJSONを保存" }).click(),
+  ]);
+  assert.equal(download.suggestedFilename(), "railway-lab-v2.json");
+  const backup = await readFile(await download.path());
+  const saved = JSON.parse(backup.toString("utf8"));
+  assert.equal(saved.schemaVersion, 2);
+  assert.equal(saved.types[0].diagramColor, "#fe6100");
+  assert.equal(saved.types[0].timetableColor, "#007700");
+  const importBackup = (name, buffer) =>
+    page
+      .locator("#open-file")
+      .setInputFiles({ name, mimeType: "application/json", buffer });
+  await importBackup(
+    "old.json",
+    Buffer.from(JSON.stringify({ ...saved, schemaVersion: 1 })),
+  );
+  await page
+    .getByRole("alert")
+    .filter({ hasText: "旧形式のJSONです" })
+    .waitFor();
+  assert.equal(await page.locator("#active-dia").inputValue(), "oud-dia1");
+  const incomplete = structuredClone(saved);
+  delete incomplete.types[0].diagramColor;
+  await importBackup(
+    "missing-color.json",
+    Buffer.from(JSON.stringify(incomplete)),
+  );
+  await page.getByRole("alert").filter({ hasText: "種別色には" }).waitFor();
+  await page.getByRole("button", { name: "サンプルを開く" }).click();
+  await importBackup("railway-lab-v2.json", backup);
+  await page
+    .getByText("railway-lab-v2.json を読み込みました", { exact: true })
+    .waitFor();
+  assert.equal(await page.locator("#active-dia").inputValue(), "oud-dia1");
+  assert.equal(await day.inputValue(), "holiday");
+  assert.equal(
+    await page.evaluate(() => localStorage.getItem("railway-lab-v1")),
+    legacyStored,
+  );
   await page.setViewportSize({ width: 390, height: 844 });
   assert.ok(
     await page.evaluate(
@@ -507,7 +567,7 @@ try {
   );
   assert.deepEqual(errors, []);
   console.log(
-    "Renewal smoke passed: route, worker, haze, direction, stroke width, zoom scale, smoothed hourly destination arrivals, capacity limit, external trains, save/reload, OuDia2nd, midnight, mobile",
+    "Renewal smoke passed: route, worker, haze, direction, stroke width, zoom scale, smoothed hourly destination arrivals, capacity limit, external trains, versioned JSON, OuDia2nd, midnight, mobile",
   );
 } finally {
   await context.close();

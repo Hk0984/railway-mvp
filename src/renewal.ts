@@ -24,7 +24,7 @@ import {
   setLineDemandForDay,
   type OutsideArea,
 } from "./line-demand";
-import { validateProject, type Project } from "./model";
+import { projectSchemaVersion, validateProject, type Project } from "./model";
 import { lineStationPath } from "./line-topology";
 import { parseOud2 } from "./oud2";
 import { decodeOud2 } from "./oud2-text";
@@ -45,9 +45,8 @@ import {
 } from "./renewal-settings";
 import { sampleProject } from "./sample";
 import { tripPurposeLabels, tripPurposes } from "./station-demand-profile";
-import { loadProject, saveProject } from "./storage";
+import { hasLegacyProject, loadProject, saveProject } from "./storage";
 import { escapeHtml as e, numberText as n, parseClock } from "./ui-utils";
-import { validateWorkspace, type Workspace } from "./workspace";
 
 const pages = {
   route: "乗換案内",
@@ -338,7 +337,7 @@ function persist() {
     refreshMessages();
   });
 }
-function setProject(p: Project, save = true) {
+function setProject(p: unknown, save = true) {
   validateProject(p);
   p.datasetId ??= crypto.randomUUID();
   project = p;
@@ -375,18 +374,15 @@ async function openFile(input: HTMLInputElement) {
   loading = true;
   try {
     if (file.size > 20 * 1024 * 1024) throw new Error("読み込み上限は20MBです");
-    let next: Project;
+    let next: unknown;
     if (/\.json$/i.test(file.name)) {
-      const data: Project | Workspace = JSON.parse(await file.text());
-      if ("projects" in data) {
-        validateWorkspace(data);
-        next = data.projects.find((p) => p.datasetId === data.activeDatasetId)!;
-      } else next = data;
+      next = JSON.parse(await file.text());
     } else {
       const bytes = new Uint8Array(await file.arrayBuffer());
       const decoded = decodeOud2(bytes, encoding);
-      next = parseOud2(decoded.text).project;
-      next.oud2!.encoding = decoded.encoding;
+      const imported = parseOud2(decoded.text).project;
+      imported.oud2!.encoding = decoded.encoding;
+      next = imported;
     }
     setProject(next);
     page = "settings";
@@ -398,51 +394,6 @@ async function openFile(input: HTMLInputElement) {
     input.value = "";
   } finally {
     loading = false;
-  }
-}
-
-async function openTypeColors(input: HTMLInputElement) {
-  const file = input.files?.[0];
-  if (!file || loading) return;
-  const current = project;
-  const encoding =
-    document.querySelector<HTMLSelectElement>("#encoding")!.value;
-  loading = true;
-  try {
-    if (file.size > 20 * 1024 * 1024) throw new Error("読み込み上限は20MBです");
-    const bytes = new Uint8Array(await file.arrayBuffer());
-    if (current !== project) return;
-    const imported = parseOud2(decodeOud2(bytes, encoding).text).project;
-    const byId = new Map(imported.types.map((type) => [type.id, type]));
-    let matched = 0;
-    const types = project.types.map((type) => {
-      const source = byId.get(type.id);
-      if (!source || source.name !== type.name) return type;
-      const { diagramColor, timetableColor } = source;
-      if (!diagramColor && !timetableColor) return type;
-      matched++;
-      return {
-        ...type,
-        ...(diagramColor && { diagramColor }),
-        ...(timetableColor && { timetableColor }),
-      };
-    });
-    if (!matched)
-      throw new Error(
-        "現在のデータと一致する種別色が見つかりませんでした。元のOuDia2ndファイルを選んでください。",
-      );
-    project.types = types;
-    notice = `${matched}種別の色を読み込みました`;
-    error = "";
-    persist();
-    // Keep the settings form mounted so any unsaved input is preserved.
-    if (page === "settings") refreshMessages();
-    else render();
-  } catch (err) {
-    fail(err);
-  } finally {
-    loading = false;
-    input.value = "";
   }
 }
 
@@ -588,7 +539,6 @@ app.addEventListener("input", (event) => {
 app.addEventListener("change", (event) => {
   const input = event.target as HTMLInputElement;
   if (input.id === "open-file") void openFile(input);
-  if (input.id === "type-colors-file") void openTypeColors(input);
   if (input.id === "active-dia" || input.id === "active-demand-day") {
     const switchDay = input.id === "active-demand-day";
     const oldDay = activeDemandDay(project);
@@ -674,7 +624,7 @@ app.addEventListener("click", (event) => {
         if (dirty)
           throw new Error("JSONに出力する前に変更を保存してください。");
         download(
-          "railway-lab.json",
+          `railway-lab-v${projectSchemaVersion}.json`,
           JSON.stringify(project, null, 2),
           "application/json",
         );
@@ -743,6 +693,9 @@ try {
     )
       stored.lineDemand = defaultLineDemand(true);
     setProject(stored, false);
+  } else if (hasLegacyProject()) {
+    notice =
+      "ブラウザに旧形式の設定が残っています。元のOuDia2ndファイル（.oud2）か新形式のJSONを開いてください。";
   }
 } catch {
   error =
