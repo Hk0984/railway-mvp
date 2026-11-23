@@ -32,6 +32,8 @@ export interface RouteQuery {
   boundaryDestinationTrains?: string[];
   origin: StationRef;
   destination: StationRef;
+  /** Ordered physical stations, including passing stations, for a known route. */
+  stationPath?: readonly StationRef[];
   mode: "depart" | "arrive";
   time: number;
   maxTransfers: number;

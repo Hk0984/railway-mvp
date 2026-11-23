@@ -392,6 +392,10 @@ export function journeyFromRides(
     valid: true,
   };
 }
+function pathPositions(path: RouteQuery["stationPath"]) {
+  return path && new Map(path.map((station, i) => [stationKey(station), i]));
+}
+
 function checkQuery(index: RoutingIndex, q: RouteQuery) {
   if (
     !index.stations.has(stationKey(q.origin)) ||
@@ -420,6 +424,16 @@ function checkQuery(index: RoutingIndex, q: RouteQuery) {
       q.windowEnd < q.windowStart)
   )
     throw new Error("検索時間範囲が不正です");
+  const positions = pathPositions(q.stationPath);
+  if (
+    positions &&
+    (positions.size !== q.stationPath!.length ||
+      positions.get(stationKey(q.origin)) !== 0 ||
+      positions.get(stationKey(q.destination)) !== positions.size - 1 ||
+      [...positions.keys()].some((key) => !index.stations.has(key)))
+  )
+    throw new Error("検索経路の駅の並びが不正です");
+  return positions;
 }
 
 /** Boarding-round multi-label timetable search. This is not the optimized route-scanning RAPTOR.
@@ -427,7 +441,7 @@ function checkQuery(index: RoutingIndex, q: RouteQuery) {
  * Labels preserve arrival / first departure / riding / walking tradeoffs; rounds bound transfers.
  * The finite supplied service day is searched, including later departures outside a reporting window. */
 export function journeyProfile(index: RoutingIndex, q: RouteQuery): Journey[] {
-  checkQuery(index, q);
+  const positions = checkQuery(index, q);
   const originKey = stationKey(q.origin),
     destinationKey = stationKey(q.destination);
   if (originKey === destinationKey) return [];
@@ -473,6 +487,7 @@ export function journeyProfile(index: RoutingIndex, q: RouteQuery): Journey[] {
       latest,
       ridingCriterion,
       choices,
+      q.stationPath,
     ]);
   const cachedRound = direct
     ? directRounds.get(index)?.entries.get(cacheKey)
@@ -518,9 +533,15 @@ export function journeyProfile(index: RoutingIndex, q: RouteQuery): Journey[] {
             ? [{ to: base.station, seconds: 0, ids: [] }]
             : (index.walks.get(base.key) ?? []);
         for (const walk of targets) {
+          const boardingKey = stationKey(walk.to);
+          if (
+            positions &&
+            (positions.get(boardingKey) ?? -1) < positions.get(base.key)!
+          )
+            continue;
           const boardSource =
             round === 1 && firstTrains ? index.boundaryBoards : index.boards;
-          const boardList = boardSource?.get(stationKey(walk.to)) ?? [];
+          const boardList = boardSource?.get(boardingKey) ?? [];
           const ready =
             base.arrival +
             walk.seconds +
@@ -557,6 +578,8 @@ export function journeyProfile(index: RoutingIndex, q: RouteQuery): Journey[] {
       }
     for (const list of boardingLabels.values())
       for (const { base, walk, board, firstTrip } of list) {
+        let position =
+          positions?.get(board.trip.stationKeys[board.index]) ?? -1;
         for (let j = board.index + 1; j < board.trip.visits.length; j++) {
           if (++work > 12000000)
             throw new Error(
@@ -565,6 +588,12 @@ export function journeyProfile(index: RoutingIndex, q: RouteQuery): Journey[] {
           const stop = board.trip.visits[j];
           const key = board.trip.stationKeys[j],
             station = board.trip.refs[j];
+          if (positions) {
+            const next = positions.get(key);
+            // Passing stations count too, even when the train cannot alight there.
+            if (next === undefined || next <= position) break;
+            position = next;
+          }
           const boundary = key === destinationKey && lastTrains;
           if (
             boundary &&
@@ -717,7 +746,9 @@ export function searchJourneys(
       ? undefined
       : stationKey(q.origin) === stationKey(q.destination)
         ? "発着が同じ駅です。移動は不要です"
-        : "明示着発時刻・対象種別・時間・乗換条件を満たす経路がありません。欠損着時刻、終便後、未設定の徒歩連絡も確認してください",
+        : q.stationPath
+          ? "指定時刻と乗換条件で、折り返さずに到着できる経路がありません。"
+          : "明示着発時刻・対象種別・時間・乗換条件を満たす経路がありません。欠損着時刻、終便後、未設定の徒歩連絡も確認してください",
     displayLimited: all.length > limit,
   };
 }
@@ -729,6 +760,8 @@ export function validateJourney(
 ): string[] {
   const errors: string[] = [];
   if (!j.legs.length) return ["乗車区間なし"];
+  const positions = pathPositions(q.stationPath);
+  let position = -1;
   if (
     j.departure !== j.legs[0].departure ||
     j.arrival !== j.legs.at(-1)!.arrival
@@ -785,6 +818,20 @@ export function validateJourney(
         JSON.stringify(trip.visits.slice(leg.boardIndex, leg.alightIndex + 1))
     )
       errors.push(`区間${i + 1}の途中駅情報不一致`);
+    if (positions && trip && a && b) {
+      for (let stop = leg.boardIndex; stop <= leg.alightIndex; stop++) {
+        const next = positions.get(trip.stationKeys[stop]);
+        if (
+          next === undefined ||
+          next < position ||
+          (next === position && stop > leg.boardIndex)
+        ) {
+          errors.push(`区間${i + 1}は指定経路外または折り返し`);
+          break;
+        }
+        position = next;
+      }
+    }
     if (i > 0) {
       const previous = j.legs[i - 1],
         t = j.transfers[i - 1];

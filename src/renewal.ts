@@ -25,6 +25,7 @@ import {
   type OutsideArea,
 } from "./line-demand";
 import { validateProject, type Project } from "./model";
+import { lineStationPath } from "./line-topology";
 import { parseOud2 } from "./oud2";
 import { decodeOud2 } from "./oud2-text";
 import { cachedRoutingIndex } from "./routing-cache";
@@ -274,6 +275,11 @@ function search() {
         datasetId: project.datasetId!,
         stationId: route.destination,
       },
+      stationPath: lineStationPath(
+        project,
+        route.origin,
+        route.destination,
+      )?.map((stationId) => ({ datasetId: project.datasetId!, stationId })),
       mode: route.mode,
       time,
       maxTransfers: 3,
