@@ -390,7 +390,7 @@ export function mountDiagram(
       : (lastStop?.arrival ?? lastLine.end);
     const { spec } = capacityForTrain(project, diaId, train);
     const cars = trainCarCount(project, diaId, train);
-    const { numbers, group } = operationGroup(project, train);
+    const { numbers, group, inheritedFrom } = operationGroup(project, train);
     const known = segments.filter((s) => s.percent !== null);
     const max = known.reduce<DiagramSegment | undefined>(
       (best, s) => (!best || s.percent! > best.percent! ? s : best),
@@ -417,7 +417,7 @@ export function mountDiagram(
     detail.innerHTML = `<h3>列車情報</h3><p><strong>${e(train.number || train.id)}</strong> ／ ${e(type)} ／ ${train.direction === "down" ? "下り" : "上り"}</p>
       <p>${e(origin)} ${originTime === undefined ? "時刻不明" : clock(originTime)} →
       ${e(destination)} ${destinationTime === undefined ? "時刻不明" : clock(destinationTime)}</p>
-      ${numbers.length ? `<p>運用番号 ${e(numbers.join("、"))}${group ? ` ／ グループ <code>${e(group)}</code>` : ""}</p>` : ""}
+      ${numbers.length ? `<p>運用番号 ${e(numbers.join("、"))}${group ? ` ／ グループ <code>${e(group)}</code>` : ""}${inheritedFrom ? `（前列車 ${e(inheritedFrom.number || inheritedFrom.id)} から継承）` : ""}</p>` : ""}
       <p>編成両数 ${cars ? n(cars, 0) + "両" : "未登録"}${spec?.vehicle ? " ／ " + e(spec.vehicle) : ""}</p>
       <p>推計延べ乗車 ${people(load?.totalBoardings)}</p>
       <p>平均混雑率 ${percent(avg)}（算出済み駅間の単純平均）</p>

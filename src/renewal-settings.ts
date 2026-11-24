@@ -121,18 +121,19 @@ const num = (
   `<input name="${name}" aria-label="${e(label)}" type="number" min="${min}" max="1000000000" step="${step}" value="${value ?? ""}">`;
 
 function operationGroups(p: Project) {
-  const groups = new Map<string, { examples: Set<string>; count: number }>();
+  const groups = new Map<string, { examples: Set<string>; count: number; inherited: number }>();
   const get = (id: string) => {
-    if (!groups.has(id)) groups.set(id, { examples: new Set(), count: 0 });
+    if (!groups.has(id)) groups.set(id, { examples: new Set(), count: 0, inherited: 0 });
     return groups.get(id)!;
   };
   for (const { trains } of p.timetables)
     for (const train of trains) {
       if (train.cancelled) continue;
-      const { group, numbers } = operationGroup(p, train);
+      const { group, numbers, inheritedFrom } = operationGroup(p, train);
       if (!group) continue;
       const row = get(group);
       row.count++;
+      if (inheritedFrom) row.inherited++;
       if (row.examples.size < 3) row.examples.add(numbers[0]);
     }
   for (const map of [p.capacitySettings?.operationGroups, p.capacitySettings?.operationGroupCars])
@@ -151,11 +152,12 @@ function formationFields(p: Project) {
   const mode = caps?.formationSource ?? (hasLegacy ? "legacy" : "type");
   const groups = operationGroups(p);
   const groupedCount = groups.reduce((total, [, { count }]) => total + count, 0);
+  const inheritedCount = groups.reduce((total, [, { inherited }]) => total + inherited, 0);
   const trainCount = p.timetables.reduce((total, dia) => total + dia.trains.filter((train) => !train.cancelled).length, 0);
   return `<div class="fields single-field"><label>編成の設定方法<select name="formation-source">${options(modes, mode)}</select></label></div>
     <fieldset class="operation-formation-fields" data-operation-formations ${mode === "operation" ? "" : "hidden disabled"}>
-      <p class="muted">運用番号の数字部分を <code>**</code> に置き換えます。例 <code>32SH → **SH</code>、<code>39C● → **C●</code>、<code>A01 → A**</code>。設定は全ダイヤ共通です。運用番号が未記載・複数ある場合や、グループの入力欄が空欄の場合は種別の設定を使います。</p>
-      ${groups.length ? `<p class="muted">全ダイヤの${n(trainCount, 0)}本のうち、${n(groupedCount, 0)}本をグループ化できました。</p><div class="table-scroll"><table><thead><tr><th scope="col">運用番号グループ</th><th scope="col">運用番号の例</th><th scope="col">列車数（全ダイヤ）</th><th scope="col">輸送定員（人／編成）</th><th scope="col">編成両数</th></tr></thead><tbody>${groups.map(([group, { examples, count }], i) => {
+      <p class="muted">運用番号の数字部分を <code>**</code> に置き換えます。例 <code>32SH → **SH</code>、<code>39C● → **C●</code>、<code>A01 → A**</code>。番線と時刻から前列車接続が一意に決まる場合は、前列車の運用番号を引き継ぎます。設定は全ダイヤ共通です。運用番号が未確定の場合やグループの入力欄が空欄の場合は、種別の設定を使います。</p>
+      ${groups.length ? `<p class="muted">全ダイヤの${n(trainCount, 0)}本のうち、${n(groupedCount, 0)}本をグループ化しました${inheritedCount ? `（うち${n(inheritedCount, 0)}本は前列車から継承）` : ""}。</p><div class="table-scroll"><table><thead><tr><th scope="col">運用番号グループ</th><th scope="col">運用番号の例</th><th scope="col">列車数（全ダイヤ）</th><th scope="col">輸送定員（人／編成）</th><th scope="col">編成両数</th></tr></thead><tbody>${groups.map(([group, { examples, count }], i) => {
         const spec = caps?.operationGroups?.[group];
         const cars = caps?.operationGroupCars?.[group] ?? spec?.carCount;
         return `<tr><th scope="row"><code>${e(group)}</code></th><td>${e([...examples].join("、") || "—")}</td><td>${n(count, 0)}</td><td>${num("group-cap" + i, spec?.kind === "transport" ? spec.value : undefined, group + "の輸送定員", "1", 1)}</td><td>${num("group-cars" + i, cars, group + "の編成両数", "1", 1)}</td></tr>`;
@@ -423,8 +425,8 @@ export function settingsBody(p: Project, dia: Timetable, draft?: LineDemand) {
             const resolved = capacityForTrain(p, dia.id, t).spec;
             const name = t.number || t.id;
             const type = p.types.find(({ id }) => id === t.typeId)?.name ?? "";
-            const { numbers, group } = operationGroup(p, t);
-            return `<tr data-train-row="${e([name, type, ...numbers, group].join(" "))}"><th scope="row">${e(name)} <small>${e(type)}・${t.direction === "down" ? "下り" : "上り"}</small>${numbers.length ? `<small>運用 ${e(numbers.join("、"))}${group ? ` ／ <code>${e(group)}</code>` : ""}</small>` : ""}</th>
+            const { numbers, group, inheritedFrom } = operationGroup(p, t);
+            return `<tr data-train-row="${e([name, type, ...numbers, group].join(" "))}"><th scope="row">${e(name)} <small>${e(type)}・${t.direction === "down" ? "下り" : "上り"}</small>${numbers.length ? `<small>運用 ${e(numbers.join("、"))}${group ? ` ／ <code>${e(group)}</code>` : ""}${inheritedFrom ? `（前列車 ${e(inheritedFrom.number || inheritedFrom.id)} から継承）` : ""}</small>` : ""}</th>
           <td><select name="train-class${i}" aria-label="${e(name)}の営業区分">${options([{ id: "", name: "種別に従う" }, ...classOptions], p.serviceClasses?.trains[key]?.state ?? "")}</select></td>
           <td>${num("train-cap" + i, own?.kind === "transport" ? own.value : own ? undefined : t.capacity, name + "の輸送定員", "1")}<small class="muted" data-capacity-hint>${!own && resolved?.kind === "transport" && t.capacity === undefined ? `継承値 ${n(resolved.value, 0)} 人` : ""}</small></td>
           <td>${num("cars" + i, own?.carCount, name + "の編成両数", "1")}</td></tr>`;
