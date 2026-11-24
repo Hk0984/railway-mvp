@@ -438,6 +438,21 @@ th small {
   border-top: 1px solid var(--line);
   padding: 0.8rem 0;
 }
+.save-bar button {
+  flex: none;
+}
+.save-feedback {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.2rem 0.75rem;
+  min-width: 0;
+}
+#form-save-error {
+  color: #7d2d1c;
+  font-weight: 650;
+  overflow-wrap: anywhere;
+}
 .message {
   padding: 0.7rem 0.82rem;
   background: var(--accent-light);
@@ -492,8 +507,19 @@ th small {
   border-radius: 10px;
   margin-bottom: 0.58rem;
 }
-.journey-card summary {
-  padding: 0.78rem 0.95rem;
+.journey-options {
+  display: grid;
+  gap: 0.35rem;
+  margin-bottom: 0.7rem;
+}
+.journey-option {
+  padding: 0.5rem 0.75rem;
+  text-align: left;
+}
+.journey-option[aria-pressed="true"] {
+  background: var(--accent-light);
+  border-color: var(--accent);
+  box-shadow: inset 3px 0 var(--accent);
 }
 .journey-time {
   font-weight: 780;
@@ -508,7 +534,6 @@ th small {
 .journey-legs {
   list-style: none;
   margin: 0;
-  border-top: 1px solid var(--line);
   padding: 0.7rem 1rem 0.9rem;
 }
 .journey-timeline {

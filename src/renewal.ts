@@ -36,6 +36,7 @@ import {
   areaCard,
   demandDayField,
   demandDayStatus,
+  missingSettings,
   readDemand,
   settingsBody,
   timetableField,
@@ -79,15 +80,17 @@ let route: RouteForm = {
   time: "07:30",
   mode: "depart",
 };
-let searched = true;
+let searched = true,
+  selectedJourney = 0;
 let notice = "",
   error = "",
+  saveError = "",
   assignmentStatus = "",
   storageStatus = "",
   dirty = false;
 let saveTicket = 0;
 let result: DiagramAssignment | undefined, worker: Worker | undefined;
-let disposeDiagram: (() => void) | undefined;
+let disposeDiagram: ReturnType<typeof mountDiagram> | undefined;
 let demand: ReturnType<typeof estimateLineDemand> | undefined;
 let loading = false;
 const dia = () => project.timetables.find((d) => d.id === diaId)!;
@@ -111,8 +114,9 @@ function legacy() {
   );
 }
 
-function render() {
-  disposeDiagram?.();
+function render(preserveDiagram = false) {
+  const view = disposeDiagram?.();
+  const pageTop = preserveDiagram && view ? window.scrollY : undefined;
   disposeDiagram = undefined;
   const timetable = dia();
   const sample = project.datasetId === "sample-mirai";
@@ -161,7 +165,9 @@ function render() {
       diaId,
       result,
       true,
+      preserveDiagram ? view : undefined,
     );
+  if (pageTop !== undefined) window.scrollTo(0, pageTop);
   refreshSaveBar();
 }
 
@@ -181,7 +187,11 @@ function fail(reason: unknown) {
 }
 function refreshSaveBar() {
   const el = document.querySelector("#form-state");
-  if (el) el.textContent = dirty ? "未保存の変更があります" : "";
+  if (el)
+    el.textContent =
+      dirty || saveError || storageStatus ? "未保存の変更があります" : "";
+  const feedback = document.querySelector("#form-save-error");
+  if (feedback) feedback.textContent = saveError || storageStatus;
   const dayStatus = document.querySelector("#demand-day-status");
   if (dayStatus) dayStatus.textContent = demandDayStatus(project);
 }
@@ -236,7 +246,7 @@ function demandPreview() {
           ? "<p>以前保存した時間帯別ODを使用します。駅利用者数を登録すると新しい推計に切り替わります。</p>"
           : `
         ${timeSummary}
-        ${settings.stationProfileTiming ? '<p class="muted">駅の属性・利用目的から到着時刻を推計しています。</p>' : ""}
+        ${settings.stationProfileTiming ? '<p class="muted">駅の属性と利用目的から到着時刻を推計しています。</p>' : ""}
         ${smoothedArrivalShares ? '<p class="muted">時間内の到着需要を曲線で補間しています。</p>' : ""}
         ${byPurpose ? `<p>駅から出発する需要の内訳　${tripPurposes.map((purpose) => `${tripPurposeLabels[purpose]} ${n(byPurpose[purpose])}人`).join("・")}</p>` : ""}
         <p>路線外の配分対象　流入 ${n(external.inbound)}人・流出 ${n(external.outbound)}人</p>
@@ -294,7 +304,7 @@ function search() {
       limit: 5,
     });
     target.innerHTML = journeys.length
-      ? `<h2 class="result-heading">経路候補 <small>${journeys.length}件${displayLimited ? "を表示" : ""}</small></h2>${journeyCards(project, diaId, journeys, result)}`
+      ? `<h2 class="result-heading">経路候補 <small>${journeys.length}件${displayLimited ? "を表示" : ""}</small></h2>${journeyCards(project, diaId, journeys, result, selectedJourney)}`
       : `<p class="message">${e(reason)}</p>`;
   } catch (err) {
     target.innerHTML = `<p class="message error" role="alert">${e((err as Error).message)}</p>`;
@@ -339,6 +349,7 @@ function persist() {
     storageStatus =
       "ブラウザに保存できませんでした。必要な場合は設定をJSONで保存してください。";
     refreshMessages();
+    refreshSaveBar();
   });
 }
 function setProject(p: unknown, save = true) {
@@ -348,7 +359,9 @@ function setProject(p: unknown, save = true) {
   diaId = p.demandSelection?.timetableId ?? p.timetables[0].id;
   route = defaultRoute();
   searched = false;
+  selectedJourney = 0;
   dirty = false;
+  saveError = "";
   resetResult();
   if (save) persist();
 }
@@ -359,6 +372,7 @@ function go(next: Page) {
   if (next === page || (page === "settings" && hasUnsavedChanges())) return;
   dirty = false;
   error = "";
+  saveError = "";
   notice = "";
   page = next;
   history.replaceState(null, "", "#" + next);
@@ -419,11 +433,14 @@ async function openFile(input: HTMLInputElement) {
     }
     setProject(merged?.project ?? incoming);
     page = "settings";
-    notice = `${file.name} を読み込みました`;
+    notice = `${file.name}を読み込みました。`;
+    const missing = missingSettings(project, dia());
+    if (missing.length)
+      notice += `設定JSONを読み込むか、下にスクロールして${missing.join("・")}を設定してください。`;
     if (merged)
       notice += json
-        ? "。現在のダイヤにJSONの設定を適用しました。"
-        : "。駅利用者数などの設定を新しいダイヤに引き継ぎました。";
+        ? "現在のダイヤにJSONの設定を適用しました。"
+        : "駅利用者数などの設定を新しいダイヤに引き継ぎました。";
     error = merged?.skipped
       ? `対応を確認できなかった設定が ${merged.skipped} 件あります。種別別・列車別の設定や路線外方面の指定を確認してください。`
       : "";
@@ -500,14 +517,14 @@ function calculate() {
       result = data.results[0];
       assignmentStatus = "計算完了";
     }
-    if (page !== "settings") render();
+    if (page !== "settings") render(true);
     else refreshMessages();
   };
   current.onerror = () => {
     if (worker !== current) return;
     resetResult();
     error = "旅客配分を実行できませんでした。もう一度お試しください。";
-    if (page !== "settings") render();
+    if (page !== "settings") render(true);
     else refreshMessages();
   };
   current.postMessage({
@@ -520,14 +537,28 @@ function calculate() {
     boardingLimitPercent: lineDemand?.boardingLimitPercent,
     smoothedArrivalShares: plan.smoothedArrivalShares,
   });
-  render();
+  render(true);
 }
 
+app.addEventListener(
+  "invalid",
+  (event) => {
+    if (
+      !(event.target instanceof HTMLElement) ||
+      !event.target.closest("#settings-form")
+    )
+      return;
+    saveError = "設定を保存できません。入力欄の値を確認してください。";
+    refreshSaveBar();
+  },
+  true,
+);
 app.addEventListener("submit", (event) => {
   event.preventDefault();
   const form = event.target as HTMLFormElement;
   if (form.id === "journey-form") {
     route = readRoute(form);
+    selectedJourney = 0;
     searched = true;
     search();
   } else if (form.id === "settings-form") {
@@ -540,13 +571,15 @@ app.addEventListener("submit", (event) => {
       demand = nextDemand;
       searched = false;
       dirty = false;
+      saveError = "";
       notice = "設定を保存しました";
       error = "";
       persist();
       refreshMessages();
       refreshSaveBar();
     } catch (err) {
-      fail(err);
+      saveError = err instanceof Error ? err.message : String(err);
+      refreshSaveBar();
     }
   }
 });
@@ -560,6 +593,7 @@ app.addEventListener("input", (event) => {
       row.hidden = !row.dataset.trainRow!.toLowerCase().includes(query);
   } else if (input.closest("#settings-form")) {
     dirty = true;
+    saveError = "";
     if (input.name.startsWith("arr-hour-") || input.name === "arrival-smooth")
       updateArrivalPreview(input.form!);
     refreshSaveBar();
@@ -584,7 +618,9 @@ app.addEventListener("change", (event) => {
     project = { ...project, demandSelection: { day, timetableId: diaId } };
     dirty = false;
     searched = false;
+    selectedJourney = 0;
     error = "";
+    saveError = "";
     notice = "";
     resetResult();
     persist();
@@ -650,7 +686,21 @@ app.addEventListener("click", (event) => {
           route.origin;
         (f.elements.namedItem("destination") as HTMLSelectElement).value =
           route.destination;
+        selectedJourney = 0;
         if (searched) search();
+        break;
+      }
+      case "journey-detail": {
+        selectedJourney = Number(el.dataset.journeyIndex);
+        app
+          .querySelectorAll<HTMLButtonElement>("[data-journey-index]")
+          .forEach((option) => {
+            const active = option === el;
+            option.setAttribute("aria-pressed", String(active));
+            document.getElementById(
+              option.getAttribute("aria-controls")!,
+            )!.hidden = !active;
+          });
         break;
       }
       case "export": {
@@ -708,7 +758,7 @@ app.addEventListener("click", (event) => {
         break;
       case "cancel":
         resetResult();
-        render();
+        render(true);
         break;
     }
   } catch (err) {

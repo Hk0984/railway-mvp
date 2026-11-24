@@ -53,6 +53,7 @@ type JourneyCall = Pick<Stop, "stationId" | "arrival" | "departure"> & {
   index: number;
   platform?: string | null;
 };
+const minuteClock = (seconds: number) => clock(Math.floor(seconds / 60) * 60);
 
 function intervalPercent(
   runs: ReadonlyMap<number, KnownRun> | undefined,
@@ -115,10 +116,10 @@ function timetableStops(
         arrival !== undefined &&
         departure !== undefined &&
         arrival !== departure
-          ? `<time>${clock(arrival)}</time>着 · <time>${clock(departure)}</time>発`
+          ? `<time>${minuteClock(arrival)}</time>着 · <time>${minuteClock(departure)}</time>発`
           : time === undefined
             ? "時刻未記載"
-            : `<time>${clock(time)}</time>${departure === undefined ? "着" : "発"}`;
+            : `<time>${minuteClock(time)}</time>${departure === undefined ? "着" : "発"}`;
       return `<li>${previous ? `<div class="journey-interval">${intervalBadge(intervalPercent(runs, previous.index, call.index), station(previous.stationId), name)}</div>` : ""}
       <div class="journey-stop${i === 0 || i === calls.length - 1 ? " journey-endpoint" : ""}"><span class="journey-stop-name">${e(name)}</span><span class="journey-stop-time">${timeText}</span>${call.platform ? `<small>${e(call.platform)}</small>` : ""}</div></li>`;
     })
@@ -130,6 +131,7 @@ export function journeyCards(
   diaId: string,
   journeys: Journey[],
   result?: DiagramAssignment,
+  selected = 0,
 ) {
   const names = new Map(project.stations.map((s) => [s.id, s.name]));
   const colors = trainTypeColors(project.types);
@@ -151,6 +153,17 @@ export function journeyCards(
       byTrain.set(service.train.id, runs);
     }
   }
+  const overview = `<div class="journey-options" role="group" aria-label="経路候補の比較">${journeys
+    .map(
+      (
+        j,
+        index,
+      ) => `<button type="button" class="journey-option" data-action="journey-detail" data-journey-index="${index}" aria-pressed="${index === selected}" aria-controls="journey-detail-${index}">
+      <span class="journey-time">${minuteClock(j.departure)} <span aria-hidden="true">→</span> ${minuteClock(j.arrival)}</span>
+      <span class="journey-meta">${n(j.elapsedSeconds / 60)}分 <span>·</span> ${j.transferCount ? "乗換 " + j.transferCount + "回" : "直通"}</span>
+    </button>`,
+    )
+    .join("")}</div>`;
   const legend = `<details class="journey-crowding-legend"><summary>駅間混雑の目安（6段階）</summary><ul>${crowdingLabels
     .map(
       (label, i) =>
@@ -158,15 +171,12 @@ export function journeyCards(
     )
     .join("")}</ul></details>`;
   return (
+    overview +
     legend +
     journeys
       .map(
         (j, index) =>
-          `<details class="journey-card" ${index === 0 ? "open" : ""}>
-      <summary>
-        <span class="journey-time">${clock(j.departure)} <span aria-hidden="true">→</span> ${clock(j.arrival)}</span>
-        <span class="journey-meta">${n(j.elapsedSeconds / 60)}分 <span>·</span> ${j.transferCount ? "乗換 " + j.transferCount + "回" : "直通"}</span>
-      </summary>
+          `<section class="journey-card" id="journey-detail-${index}" aria-label="経路候補${index + 1}の詳細" ${index === selected ? "" : "hidden"}>
       <ol class="journey-legs">${j.legs
         .map((leg, i) => {
           const view = legPresentation(project, leg);
@@ -179,7 +189,7 @@ export function journeyCards(
         </li>`;
         })
         .join("")}</ol>
-    </details>`,
+    </section>`,
       )
       .join("")
   );

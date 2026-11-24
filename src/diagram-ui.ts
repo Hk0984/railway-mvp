@@ -37,6 +37,13 @@ const defaultZoom = 640;
 const zoomLevels = [40, 80, 160, 320, defaultZoom];
 type DisplayDirection = Direction | "all";
 type DiagramSettings = DiagramRenderSettings & { direction: DisplayDirection };
+interface DiagramViewport {
+  left: number;
+  top: number;
+  zoom: number;
+  trainId: string;
+  segmentIndex: number | undefined;
+}
 const directions = { all: "上下両方向", up: "上り", down: "下り" };
 const lineWidthRange = { min: 0.4, max: 4, step: 0.1 };
 const defaultSettings: DiagramSettings = {
@@ -116,6 +123,7 @@ export function mountDiagram(
   diaId: string,
   result?: DiagramAssignment | AssignmentResult,
   compact = false,
+  viewport?: DiagramViewport,
 ) {
   const settings = readSettings();
   if (compact)
@@ -139,6 +147,7 @@ export function mountDiagram(
     routeSelection.get(project) ?? 0,
     routes.length - 1,
   );
+  let zoom = viewport?.zoom ?? defaultZoom;
   let stationNames: string[] = [];
   let visibleSegments = new Set<DiagramSegment>();
   let query = indexPlot([]);
@@ -182,7 +191,7 @@ export function mountDiagram(
         )
         .join("")}</select></label>
       <label>スジ線の太さ<input id="diagram-line-width" type="range" min="${lineWidthRange.min}" max="${lineWidthRange.max}" step="${lineWidthRange.step}" value="${settings.lineWidth}" aria-valuetext="${n(settings.lineWidth)} ピクセル"><output id="diagram-line-width-value" for="diagram-line-width" aria-hidden="true">${n(settings.lineWidth)} px</output></label>
-      <label>時間軸<select id="diagram-zoom">${zoomLevels.map((z) => `<option value="${z}" ${z === defaultZoom ? "selected" : ""}>${(z / defaultZoom) * 100}%</option>`).join("")}</select></label>
+      <label>時間軸<select id="diagram-zoom">${zoomLevels.map((z) => `<option value="${z}" ${z === zoom ? "selected" : ""}>${(z / defaultZoom) * 100}%</option>`).join("")}</select></label>
       ${compact ? "" : `<button data-page="9">${result ? "配分結果・条件を確認" : "旅客配分を計算"}</button>`}
     </div>
     <p class="muted">${result ? `配分推計・${result.diagnostics?.hourlyArrivals ? "希望到着時刻と所要時間" : result.config.method === "logit" ? "ロジット" : "所要時間"}${result.diagnostics?.crowdingConsidered ? "・空席と混雑も考慮" : ""}／${result.diagnostics?.boardingLimit ? `乗車上限 ${n(result.diagnostics.boardingLimit.percent, 4)}%` : `定員制約${result.capacity ? "あり" : "なし"}`}・${result.diagnostics?.hourlyArrivals ? "目的地への到着時間帯" : "需要時間窓"} ${clock(result.config.start)}–${clock(result.config.end)}` : "配分結果なし。駅利用者数・営業区分・輸送定員を設定して計算してください。"} 駅は${routes.length > 1 ? "選択した経路順" : "登録順"}・等間隔。通過時刻を省略した駅は前後の記録時刻を結びます。停車駅の時刻が欠ける区間は破線で表示。</p>
@@ -226,9 +235,11 @@ export function mountDiagram(
   const segmentSelect = find<HTMLSelectElement>("#diagram-section");
   const lineWidth = find<HTMLInputElement>("#diagram-line-width");
   const lineWidthValue = find<HTMLOutputElement>("#diagram-line-width-value");
-  let zoom = defaultZoom,
-    selected = "",
-    active: DiagramSegment | undefined,
+  let selected = viewport?.trainId ?? "",
+    active =
+      viewport?.segmentIndex === undefined
+        ? undefined
+        : byId.get(selected)?.segments[viewport.segmentIndex],
     visible: VisibleLine[] = [];
   let frame = 0;
 
@@ -589,8 +600,19 @@ export function mountDiagram(
       updateSettings();
   });
   showRoute();
+  if (viewport) {
+    scroll.scrollLeft = viewport.left;
+    scroll.scrollTop = viewport.top;
+  }
   return () => {
     observer.disconnect();
     cancelAnimationFrame(frame);
+    return {
+      left: scroll.scrollLeft,
+      top: scroll.scrollTop,
+      zoom,
+      trainId: selected,
+      segmentIndex: active?.service.segments.indexOf(active),
+    };
   };
 }

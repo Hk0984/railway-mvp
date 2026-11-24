@@ -1,5 +1,5 @@
 import { drawHourlyDemand } from "./hourly-demand-preview";
-import { capacitySpec } from "./capacity-model";
+import { capacitySpec, transportCapacity } from "./capacity-model";
 import {
   classLabels,
   serviceClass,
@@ -61,6 +61,53 @@ export function demandDayStatus(project: Project) {
 
 export function timetableField(project: Project, diaId: string) {
   return `<label>対象ダイヤ<select id="active-dia">${options(project.timetables, diaId)}</select></label>`;
+}
+
+export function missingSettings(p: Project, dia: Timetable) {
+  const d = lineDemandForDay(p);
+  const missing: string[] = [];
+  if (p.stations.some(({ id }) => !Object.hasOwn(d.counts, id)))
+    missing.push("駅利用者数");
+  if (
+    p.stations.some(({ id }) => {
+      const profile = d.stationProfiles?.[id];
+      return !profile?.primary && !profile?.secondary && !profile?.shares;
+    })
+  )
+    missing.push("駅属性と利用目的");
+  const hasDemand = p.lineDemand !== undefined || hasSeparateDemand(p);
+  if (!hasDemand) missing.push("時間帯の振り分け");
+  const configuredBoundaries = new Set(d.outside.map((area) => area.stationId));
+  if (
+    d.outside.some(
+      (area) =>
+        area.mode === "through" &&
+        (["inbound", "outbound"] as const).some(
+          (flow) => area[flow] > 0 && !area.trains[dia.id]?.[flow].length,
+        ),
+    ) ||
+    dia.trains.some(
+      (train) =>
+        !train.cancelled &&
+        [train.externalOrigin, train.externalDestination].some(
+          (end) => end && !configuredBoundaries.has(end.boundaryStationId),
+        ),
+    )
+  )
+    missing.push("（路線外方面）");
+  if (
+    dia.trains.some((train) => {
+      if (train.cancelled) return false;
+      const { state } = serviceClass(p, dia.id, train);
+      return (
+        state === "review" ||
+        (state === "passenger" &&
+          transportCapacity(p, dia.id, train.id) === null)
+      );
+    })
+  )
+    missing.push("営業区分と輸送定員");
+  return missing;
 }
 
 const num = (
@@ -126,7 +173,7 @@ function destinationArrivalFields(project: Project, demand: LineDemand) {
   const hours = arrivalHours(project);
   return `
     <p class="muted">1日の到着需要を上り・下りそれぞれ100%に振り分けます。乗換がある場合は目的地に着く列車の方向を使います。路線外への流出は接続駅への到着時刻で集計します。</p>
-    <label class="check"><input type="checkbox" name="arrival-smooth" ${demand.destinationArrival?.smooth ? "checked" : ""}> 到着需要をなだらかに補間</label>
+    <label class="check"><input type="checkbox" name="arrival-smooth" ${demand.destinationArrival?.smooth !== false ? "checked" : ""}> 到着需要をなだらかに補間</label>
     <p class="muted">各1時間の合計割合を保ち、時刻の境目をひと続きの増減でつなぎます。</p>
     <div class="arrival-preview">
       <p class="arrival-preview-key muted"><span>上り</span><span>下り</span><span>1時間あたりの到着割合（%）</span></p>
@@ -251,7 +298,7 @@ export function settingsBody(p: Project, dia: Timetable, draft?: LineDemand) {
         .join("")}</tbody></table></div>
     </section>
     <section class="surface">
-      <div class="section-heading"><div><h2>駅の属性・利用目的</h2><p class="muted">属性から目的別の行き先を推計します。副属性の反映は25%です。割合をすべて空欄にすると欄に表示された初期値を使います。個別に指定する場合は3項目を合計100%にしてください。</p></div></div>
+      <div class="section-heading"><div><h2>駅の属性と利用目的</h2><p class="muted">属性から目的別の行き先を推計します。副属性の反映は25%です。割合をすべて空欄にすると欄に表示された初期値を使います。個別に指定する場合は3項目を合計100%にしてください。</p></div></div>
       <div class="table-scroll"><table class="station-purpose-table"><thead><tr><th scope="col">駅</th><th scope="col">主属性</th><th scope="col">副属性</th>${tripPurposes.map((purpose) => `<th scope="col">${tripPurposeLabels[purpose]}（%）</th>`).join("")}</tr></thead>
       <tbody>${p.stations.map((s, i) => stationProfileRow(s.name, i, d.stationProfiles?.[s.id])).join("")}</tbody></table></div>
     </section>
@@ -261,7 +308,7 @@ export function settingsBody(p: Project, dia: Timetable, draft?: LineDemand) {
         <label>時間帯の基準<select name="demand-time-mode" aria-label="時間帯の基準">
           <option value="boarding">出発駅に着く時間帯（4枠）</option>
           <option value="arrival" ${timing === "arrival" ? "selected" : ""}>目的地に着く時刻（上下別・1時間ごと）</option>
-          <option value="profile" ${timing === "profile" ? "selected" : ""}>駅の属性・利用目的から到着時刻を推計</option>
+          <option value="profile" ${timing === "profile" ? "selected" : ""}>駅の属性と利用目的から到着時刻を推計</option>
         </select></label>
       </div>
       <fieldset class="demand-time-fields" data-demand-timing="boarding" ${timing !== "boarding" ? "hidden disabled" : ""}>
@@ -289,14 +336,14 @@ export function settingsBody(p: Project, dia: Timetable, draft?: LineDemand) {
       <div id="outside-areas">${d.outside.map((area, i) => areaCard(p, dia, area, i)).join("")}</div>
     </section>
     <section class="surface">
-      <div class="section-heading"><div><h2>営業区分・輸送定員</h2><p class="muted">定員は1編成あたりの人数です。車内図では種別の編成両数を使い、列車別の編成両数があればそちらを優先します。</p></div><button type="button" data-action="all-passenger">未確認の種別を営業に設定</button></div>
+      <div class="section-heading"><div><h2>営業区分と輸送定員</h2><p class="muted">定員は1編成あたりの人数です。車内図では種別の編成両数を使い、列車別の編成両数があればそちらを優先します。</p></div><button type="button" data-action="all-passenger">未確認の種別を営業に設定</button></div>
       <div class="fields">
         <label>最低乗換時間（秒）<input name="minimum-transfer-seconds" type="number" min="1" step="1" required value="${d.minimumTransferSeconds ?? defaultLineTransferSeconds}" aria-describedby="minimum-transfer-hint"></label>
         <label>乗車上限の混雑率（%）<input name="boarding-limit-percent" type="number" min="0" step="any" value="${d.boardingLimitPercent ?? ""}" placeholder="例：150" aria-describedby="boarding-limit-hint"></label>
       </div>
       <p id="minimum-transfer-hint" class="muted">乗換案内・混雑推計の全日区分に共通です。駅構内の移動に時間がかかる場合は値を大きくしてください。</p>
       <p id="boarding-limit-hint" class="muted">乗車上限は全日区分で共通です。空欄なら上限なし。指定の混雑率に達すると、乗り切れない利用者は目的地へ行ける後続便を待ちます。</p>
-      <div class="table-scroll"><table><thead><tr><th scope="col">列車種別</th><th scope="col">営業区分</th><th scope="col">輸送定員（人）</th><th scope="col">編成両数</th></tr></thead>
+      <div class="table-scroll"><table><thead><tr><th scope="col">列車種別</th><th scope="col">営業区分</th><th scope="col">輸送定員（人／編成）</th><th scope="col">編成両数</th></tr></thead>
       <tbody>${p.types
         .map((t, i) => {
           const state = p.serviceClasses?.types[t.id]?.state ?? "review";
@@ -306,10 +353,10 @@ export function settingsBody(p: Project, dia: Timetable, draft?: LineDemand) {
         <td>${num("type-cars" + i, t.carCount ?? capacity?.carCount, t.name + "の編成両数", "1", 1)}</td></tr>`;
         })
         .join("")}</tbody></table></div>
-      <div class="fields single-field"><label>ダイヤ共通の輸送定員（人、任意）${num("default-cap", p.capacitySettings?.timetables[dia.id]?.kind === "transport" ? p.capacitySettings.timetables[dia.id].value : undefined, "ダイヤ共通の輸送定員", "1")}</label></div>
+      <div class="fields single-field"><label>ダイヤ共通の輸送定員（人／編成、任意）${num("default-cap", p.capacitySettings?.timetables[dia.id]?.kind === "transport" ? p.capacitySettings.timetables[dia.id].value : undefined, "ダイヤ共通の輸送定員", "1")}</label></div>
       <details><summary>列車別の設定（${n(dia.trains.length, 0)}本）</summary>
         <label class="train-filter">列車番号・種別で絞り込む<input type="search" id="train-filter"></label>
-        <div class="table-scroll train-config"><table><thead><tr><th scope="col">列車</th><th scope="col">営業区分</th><th scope="col">輸送定員（人）</th><th scope="col">編成両数</th></tr></thead>
+        <div class="table-scroll train-config"><table><thead><tr><th scope="col">列車</th><th scope="col">営業区分</th><th scope="col">輸送定員（人／編成）</th><th scope="col">編成両数</th></tr></thead>
         <tbody>${dia.trains
           .map((t, i) => {
             const key = trainClassKey(dia.id, t.id);
@@ -325,7 +372,7 @@ export function settingsBody(p: Project, dia: Timetable, draft?: LineDemand) {
           .join("")}</tbody></table></div>
       </details>
     </section>
-    <div class="save-bar"><button type="submit" class="primary">設定を保存</button><span id="form-state" class="muted" aria-live="polite"></span></div>
+    <div class="save-bar"><button type="submit" class="primary">設定を保存</button><div class="save-feedback"><span id="form-state" class="muted" aria-live="polite"></span><span id="form-save-error" role="alert"></span></div></div>
   </form>`;
 }
 

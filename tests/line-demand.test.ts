@@ -224,6 +224,15 @@ describe("single-line demand", () => {
       total(atSchool.filter((row) => row.purpose === "school")),
     ).toBeCloseTo(d.counts.s2.board * 0.7);
     expect(plan.smoothedArrivalShares).toEqual({ up, down });
+    delete d.destinationArrival.smooth;
+    expect(estimateLineDemand(p, "weekday").smoothedArrivalShares).toEqual({
+      up,
+      down,
+    });
+    d.destinationArrival.smooth = false;
+    expect(
+      estimateLineDemand(p, "weekday").smoothedArrivalShares,
+    ).toBeUndefined();
     d.stationProfiles.s2.shares!.private = 20;
     expect(() => validateProject(p)).toThrow(
       "通勤・通学・非定期の割合を合計100%",

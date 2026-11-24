@@ -212,7 +212,7 @@ function validateDemandSettings(project: Project, d: LineDemand) {
       typeof d.stationProfiles !== "object" ||
       Array.isArray(d.stationProfiles)
     )
-      throw new Error("駅の属性・利用目的の設定形式を確認してください");
+      throw new Error("駅の属性と利用目的の設定形式を確認してください");
     for (const [id, profile] of Object.entries(d.stationProfiles)) {
       if (!stations.has(id))
         throw new Error("駅の属性に登録されていない駅があります");
@@ -545,10 +545,12 @@ export function estimateLineDemand(
   const windows = usesArrival
     ? hourlyWindows(start, end)
     : timeWindows(start, end);
-  const curves = arrival?.smooth
+  const manualSmoothedShares =
+    arrival?.smooth !== false ? arrival?.shares : undefined;
+  const curves = manualSmoothedShares
     ? {
-        up: hourlyDemandCurve(arrival.shares.up, true),
-        down: hourlyDemandCurve(arrival.shares.down, true),
+        up: hourlyDemandCurve(manualSmoothedShares.up, true),
+        down: hourlyDemandCurve(manualSmoothedShares.down, true),
       }
     : undefined;
   const windowWeights = curves && {
@@ -795,9 +797,7 @@ export function estimateLineDemand(
   }
   const smoothedArrivalShares = automaticTiming
     ? byArrival
-    : arrival?.smooth
-      ? arrival.shares
-      : undefined;
+    : manualSmoothedShares;
   if (smoothedArrivalShares && splitAutomatic.length) {
     const hourly = {
       up: hourlyDemandCurve(smoothedArrivalShares.up, true),

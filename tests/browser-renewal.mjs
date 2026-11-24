@@ -40,7 +40,33 @@ try {
   await page.getByRole("button", { name: "経路を検索" }).click();
   const firstJourney = page.locator(".journey-card").first();
   await firstJourney.waitFor();
-  assert.match(await firstJourney.innerText(), /[0-9]{2}:[0-9]{2}/);
+  const journeyOptions = page.locator(".journey-option");
+  assert.ok((await journeyOptions.count()) > 1);
+  assert.equal(await page.locator(".journey-card:visible").count(), 1);
+  assert.ok(
+    await page.evaluate(
+      () =>
+        document.querySelector(".journey-options").getBoundingClientRect()
+          .bottom <=
+        document.querySelector(".journey-card").getBoundingClientRect().top,
+    ),
+  );
+  for (const time of await page
+    .locator(".journey-time, .journey-stop-time time")
+    .allTextContents()) {
+    assert.match(time, /\d{2}:\d{2}/);
+    assert.doesNotMatch(time, /\d{2}:\d{2}:\d{2}/);
+  }
+  await journeyOptions.nth(1).click();
+  assert.equal(
+    await journeyOptions.nth(1).getAttribute("aria-pressed"),
+    "true",
+  );
+  assert.equal(
+    await page.locator(".journey-card:visible").getAttribute("id"),
+    "journey-detail-1",
+  );
+  await journeyOptions.first().click();
   assert.deepEqual(
     await firstJourney.locator(".journey-stop-name").allTextContents(),
     ["緑丘ニュータウン", "中央市", "港ビジネス街", "東雲学園"],
@@ -113,6 +139,19 @@ try {
   await page.getByRole("button", { name: "混雑を計算" }).click();
   await page.getByText("計算完了", { exact: true }).waitFor();
   await diagramTrain.selectOption("down-8");
+  await section.selectOption("0");
+  await zoom.selectOption("320");
+  const plot = page.locator(".diagram-scroll");
+  await plot.evaluate((el) => {
+    el.scrollLeft = 250;
+  });
+  await page.getByRole("button", { name: "混雑を再計算", exact: true }).click();
+  await page.getByText("計算完了", { exact: true }).waitFor();
+  assert.equal(await zoom.inputValue(), "320");
+  assert.equal(await diagramTrain.inputValue(), "down-8");
+  assert.equal(await section.inputValue(), "0");
+  assert.equal(await plot.evaluate((el) => el.scrollLeft), 250);
+  await zoom.selectOption("640");
   assert.match(
     await page.locator("#diagram-train-detail").innerText(),
     /編成両数 8両/,
@@ -247,16 +286,20 @@ try {
     "90%",
   );
   await page.getByRole("button", { name: "設定を保存", exact: true }).click();
-  await page
-    .getByRole("alert")
-    .filter({ hasText: "上りの目的地到着割合を合計100%" })
-    .waitFor();
+  const saveError = page.locator(".save-bar [role=alert]");
+  assert.match(await saveError.innerText(), /上りの目的地到着割合を合計100%/);
+  assert.equal(
+    await page.locator(".save-bar #form-state").innerText(),
+    "未保存の変更があります",
+  );
   await upEleven.fill("100");
   const curve = page.getByRole("img", { name: "上り・下りの到着需要の推移" });
-  const unsmoothed = await curve.evaluate((canvas) => canvas.toDataURL());
   const smoothing = page.getByRole("checkbox", {
     name: "到着需要をなだらかに補間",
   });
+  assert.equal(await smoothing.isChecked(), true);
+  await smoothing.uncheck();
+  const unsmoothed = await curve.evaluate((canvas) => canvas.toDataURL());
   await smoothing.check();
   assert.notEqual(
     await curve.evaluate((canvas) => canvas.toDataURL()),
@@ -490,7 +533,21 @@ try {
       buffer: Buffer.from(contents),
     });
   await openOud("basic-1.07.oud2", oud);
-  await page.getByText("basic-1.07.oud2 を読み込みました").waitFor();
+  await page
+    .getByText(
+      "basic-1.07.oud2を読み込みました。設定JSONを読み込むか、下にスクロールして駅利用者数・駅属性と利用目的・時間帯の振り分け・営業区分と輸送定員を設定してください。",
+      { exact: true },
+    )
+    .waitFor();
+  await page
+    .getByRole("heading", { name: "駅の属性と利用目的", exact: true })
+    .waitFor();
+  await page
+    .getByRole("heading", { name: "営業区分と輸送定員", exact: true })
+    .waitFor();
+  await page
+    .getByRole("columnheader", { name: "輸送定員（人／編成）", exact: true })
+    .waitFor();
   await page.locator("#active-dia").selectOption("oud-dia1");
   await page.getByRole("link", { name: "混雑ダイヤ図" }).click();
   await day.selectOption("holiday");
@@ -551,14 +608,16 @@ try {
   await page.getByRole("alert").filter({ hasText: "種別色には" }).waitFor();
   await page.getByRole("button", { name: "サンプルを開く" }).click();
   await importBackup("railway-lab-v2.json", backup);
-  await page
-    .getByText("railway-lab-v2.json を読み込みました", { exact: true })
-    .waitFor();
+  await page.getByText(/railway-lab-v2\.jsonを読み込みました/).waitFor();
   assert.equal(await page.locator("#active-dia").inputValue(), "oud-dia1");
   assert.equal(await day.inputValue(), "holiday");
   const revisedBoard = page.locator('[name="board0"]');
   const capacity = page.locator('[name="cap0"]');
   await revisedBoard.fill("1000");
+  await page.locator('[name="alight1"]').fill("1000");
+  await page
+    .locator('[name="station-primary-0"]')
+    .selectOption("low-density-residential");
   await capacity.fill("600");
   await page.locator('[name="class0"]').selectOption("passenger");
   await page.getByRole("button", { name: "設定を保存", exact: true }).click();
@@ -577,6 +636,10 @@ try {
   await page
     .getByText(/駅利用者数などの設定を新しいダイヤに引き継ぎました/)
     .waitFor();
+  assert.match(
+    await page.locator("#messages").innerText(),
+    /下にスクロールして駅属性と利用目的を設定してください/,
+  );
   assert.equal(await revisedBoard.inputValue(), "1200");
   assert.equal(await capacity.inputValue(), "600");
   assert.equal(await page.locator('[name="class0"]').inputValue(), "passenger");
