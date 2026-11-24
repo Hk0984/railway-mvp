@@ -551,7 +551,6 @@ export function simulateCapacity(
       trip.train.id,
     )!;
     l.capacity = spec.value;
-    l.capacitySource = spec.basis.startsWith("旧") ? l.capacitySource : "train";
     let onboard = 0;
     l.segmentLoads = [];
     l.segmentObserved = [];

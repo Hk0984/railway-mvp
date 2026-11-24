@@ -42,7 +42,9 @@ import {
   timetableField,
   updateArrivalPreview,
   updateDemandTiming,
+  updateFormationSource,
   updateStationPurposeDefaults,
+  updateTrainCapacityHints,
 } from "./renewal-settings";
 import { sampleProject } from "./sample";
 import { tripPurposeLabels, tripPurposes } from "./station-demand-profile";
@@ -574,6 +576,7 @@ app.addEventListener("submit", (event) => {
       saveError = "";
       notice = "設定を保存しました";
       error = "";
+      updateTrainCapacityHints(form, project, dia());
       persist();
       refreshMessages();
       refreshSaveBar();
@@ -631,6 +634,7 @@ app.addEventListener("change", (event) => {
   const form = input.closest<HTMLFormElement>("#settings-form");
   if (!form) return;
   if (input.name === "demand-time-mode") updateDemandTiming(form);
+  if (input.name === "formation-source") updateFormationSource(form, input.value);
   if (input.hasAttribute("data-station-attribute"))
     updateStationPurposeDefaults(
       input.closest<HTMLElement>("[data-station-profile]")!,

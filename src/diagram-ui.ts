@@ -2,7 +2,8 @@ import { diagramRoutes } from "./diagram-routes";
 import "./diagram.css";
 import { clock } from "./analysis";
 import type { AssignmentResult, DiagramAssignment } from "./assignment-model";
-import { capacitySpec, trainCarCount } from "./capacity-model";
+import { capacityForTrain, trainCarCount } from "./capacity-model";
+import { operationGroup } from "./operation-numbers";
 import { trainInterior } from "./diagram-interior";
 import { stationBoardingChart, trainChart } from "./diagram-train-chart";
 import { assignmentTransfers } from "./diagram-transfers";
@@ -387,8 +388,9 @@ export function mountDiagram(
     const destinationTime = train.externalDestination
       ? train.externalDestination.externalTime
       : (lastStop?.arrival ?? lastLine.end);
-    const spec = capacitySpec(project, diaId, train.id);
+    const { spec } = capacityForTrain(project, diaId, train);
     const cars = trainCarCount(project, diaId, train);
+    const { numbers, group } = operationGroup(project, train);
     const known = segments.filter((s) => s.percent !== null);
     const max = known.reduce<DiagramSegment | undefined>(
       (best, s) => (!best || s.percent! > best.percent! ? s : best),
@@ -415,6 +417,7 @@ export function mountDiagram(
     detail.innerHTML = `<h3>列車情報</h3><p><strong>${e(train.number || train.id)}</strong> ／ ${e(type)} ／ ${train.direction === "down" ? "下り" : "上り"}</p>
       <p>${e(origin)} ${originTime === undefined ? "時刻不明" : clock(originTime)} →
       ${e(destination)} ${destinationTime === undefined ? "時刻不明" : clock(destinationTime)}</p>
+      ${numbers.length ? `<p>運用番号 ${e(numbers.join("、"))}${group ? ` ／ グループ <code>${e(group)}</code>` : ""}</p>` : ""}
       <p>編成両数 ${cars ? n(cars, 0) + "両" : "未登録"}${spec?.vehicle ? " ／ " + e(spec.vehicle) : ""}</p>
       <p>推計延べ乗車 ${people(load?.totalBoardings)}</p>
       <p>平均混雑率 ${percent(avg)}（算出済み駅間の単純平均）</p>
@@ -429,7 +432,10 @@ export function mountDiagram(
       return;
     }
     const { train, load } = segment.service;
-    const spec = capacitySpec(project, diaId, train.id);
+    const { spec, source } = capacityForTrain(project, diaId, train);
+    const group = source === "operation"
+      ? operationGroup(project, train, project.capacitySettings?.formationSource === undefined).group
+      : null;
     const capacity = load
       ? load.capacity
       : spec?.kind === "transport"
@@ -452,7 +458,7 @@ export function mountDiagram(
                   ? "乗車人数は推計済み・輸送定員が未登録"
                   : "旅客配分による推計値";
     detail.innerHTML = `<h3>区間情報</h3><p><strong>${e(train.number || train.id)}</strong> ／ ${e(route(segment))} ／ ${clock(segment.start)}–${clock(segment.end)}</p>
-      <p>推定乗車人数 ${people(segment.passengers)} ／ 輸送力 ${people(capacity)}${capacity !== null && spec?.kind === "transport" ? "（" + e(spec.basis) + "）" : ""}</p>
+      <p>推定乗車人数 ${people(segment.passengers)} ／ 輸送力 ${people(capacity)}${capacity !== null && spec?.kind === "transport" ? `（${group ? `運用番号グループ ${e(group)} ／ ` : ""}${e(spec.basis)}）` : ""}</p>
       <p>混雑率 ${percent(segment.percent)} ／ ${status}</p>
       ${segment.untimedPasses ? `<p class="muted">時刻の記載がない通過駅　${segment.untimedPasses.map((s) => e(station(s.stationId))).join("、")}</p>` : ""}
       ${trainInterior(segment.passengers, capacity, trainCarCount(project, diaId, train))}`;

@@ -27,7 +27,24 @@ export function operationNumbers(p: Project, t: Train): string[] {
   }
   return [...new Set(values)];
 }
-export function operationGroup(p: Project, t: Train) {
+export function operationPattern(number: string) {
+  const mask = number
+    .trim()
+    .replace(/([\\*])/g, "\\$1")
+    .replace(/\p{Nd}+/gu, "**")
+    .replace(/[a-z]/g, (letter) => letter.toUpperCase());
+  return isOperationPattern(mask) ? mask : null;
+}
+
+export function isOperationPattern(mask: string) {
+  return (
+    mask.includes("**") &&
+    mask !== "**" &&
+    /^(?:\*\*|\\[\\*]|[^\p{Nd}\p{C}\s\\*])+$/u.test(mask)
+  );
+}
+
+export function operationGroup(p: Project, t: Train, legacy = false) {
   const numbers = operationNumbers(p, t);
   if (numbers.length !== 1)
     return {
@@ -37,13 +54,17 @@ export function operationGroup(p: Project, t: Train) {
         ? "複数の運用番号・変更があります。記号定員の自動適用なし"
         : "明示運用番号なし（別列車からは推測しません）",
     };
-  const letters = numbers[0].match(/[A-Za-z]+/g);
+  const letters = legacy ? numbers[0].match(/[A-Za-z]+/g) : undefined;
+  const group = legacy
+    ? letters?.length === 1
+      ? letters[0].toUpperCase()
+      : null
+    : operationPattern(numbers[0]);
   return {
     numbers,
-    group: letters?.length === 1 ? letters[0].toUpperCase() : null,
-    reason:
-      letters?.length === 1
-        ? "明示運用番号の英字記号"
-        : "英字記号を一意に特定できません",
+    group,
+    reason: group
+      ? "明示運用番号から分類"
+      : "運用番号のグループを特定できません",
   };
 }

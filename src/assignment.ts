@@ -1,11 +1,10 @@
 import { journeyProfile, validateJourney, type RoutingIndex } from "./routing";
 import { type Journey, type RouteQuery } from "./routing-model";
-import { capacityOf, isPassengerTrain } from "./classification";
+import { isPassengerTrain } from "./classification";
 import { allocateVolume } from "./temporal-demand";
 import { cachedProfile } from "./assignment-cache";
 import { assignCapacity, validateCapacity } from "./capacity-assignment";
-import { transportCapacity, capacitySpec } from "./capacity-model";
-import { operationGroup } from "./operation-numbers";
+import { capacityForTrain, capacitySpec } from "./capacity-model";
 import {
   arrivalBreaks,
   arrivalWeight,
@@ -390,9 +389,8 @@ export function aggregateTrainLoads(
   for (const [key, trip] of index.trips) {
     const p = trip.selection.project,
       t = trip.train,
-      capacity = p.capacitySettings
-        ? transportCapacity(p, trip.selection.timetableId, t.id)
-        : capacityOf(p, t);
+      { spec, source } = capacityForTrain(p, trip.selection.timetableId, t),
+      capacity = spec?.kind === "transport" ? spec.value : null;
     loads.set(key, {
       key,
       datasetId: trip.selection.datasetId,
@@ -412,17 +410,7 @@ export function aggregateTrainLoads(
       peakLoad: 0,
       peakSegments: [],
       capacity,
-      capacitySource:
-        p.capacitySettings?.trains[
-          JSON.stringify([trip.selection.timetableId, t.id])
-        ] || t.capacity !== undefined
-          ? "train"
-          : operationGroup(p, t).group &&
-              p.capacitySettings?.operationGroups?.[operationGroup(p, t).group!]
-            ? "operation"
-            : p.typeCapacities?.[t.typeId] !== undefined
-              ? "type"
-              : "unknown",
+      capacitySource: source,
       occupancies: [],
       peakOccupancy: null,
     });

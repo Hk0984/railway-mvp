@@ -1,5 +1,5 @@
 import { drawHourlyDemand } from "./hourly-demand-preview";
-import { capacitySpec, transportCapacity } from "./capacity-model";
+import { capacityForTrain } from "./capacity-model";
 import {
   classLabels,
   serviceClass,
@@ -22,6 +22,7 @@ import {
   type OutsideArea,
 } from "./line-demand";
 import type { Project, Timetable } from "./model";
+import { isOperationPattern, operationGroup } from "./operation-numbers";
 import {
   defaultPurposeShares,
   stationAttributes,
@@ -102,7 +103,7 @@ export function missingSettings(p: Project, dia: Timetable) {
       return (
         state === "review" ||
         (state === "passenger" &&
-          transportCapacity(p, dia.id, train.id) === null)
+          capacityForTrain(p, dia.id, train).spec?.kind !== "transport")
       );
     })
   )
@@ -118,6 +119,63 @@ const num = (
   min = 0,
 ) =>
   `<input name="${name}" aria-label="${e(label)}" type="number" min="${min}" max="1000000000" step="${step}" value="${value ?? ""}">`;
+
+function operationGroups(p: Project) {
+  const groups = new Map<string, { examples: Set<string>; count: number }>();
+  const get = (id: string) => {
+    if (!groups.has(id)) groups.set(id, { examples: new Set(), count: 0 });
+    return groups.get(id)!;
+  };
+  for (const { trains } of p.timetables)
+    for (const train of trains) {
+      if (train.cancelled) continue;
+      const { group, numbers } = operationGroup(p, train);
+      if (!group) continue;
+      const row = get(group);
+      row.count++;
+      if (row.examples.size < 3) row.examples.add(numbers[0]);
+    }
+  for (const map of [p.capacitySettings?.operationGroups, p.capacitySettings?.operationGroupCars])
+    for (const id of Object.keys(map ?? {})) if (isOperationPattern(id)) get(id);
+  return [...groups].sort(([a], [b]) => a.localeCompare(b));
+}
+
+function formationFields(p: Project) {
+  const caps = p.capacitySettings;
+  const modes = [
+    { id: "type", name: "種別から編成定員と両数を設定" },
+    { id: "operation", name: "運用番号から編成定員と両数を設定" },
+  ];
+  const hasLegacy = Object.keys(caps?.operationGroups ?? {}).some((id) => /^[A-Z]+$/.test(id));
+  if (hasLegacy) modes.push({ id: "legacy", name: "保存済みの旧運用記号設定を使用" });
+  const mode = caps?.formationSource ?? (hasLegacy ? "legacy" : "type");
+  const groups = operationGroups(p);
+  const groupedCount = groups.reduce((total, [, { count }]) => total + count, 0);
+  const trainCount = p.timetables.reduce((total, dia) => total + dia.trains.filter((train) => !train.cancelled).length, 0);
+  return `<div class="fields single-field"><label>編成の設定方法<select name="formation-source">${options(modes, mode)}</select></label></div>
+    <fieldset class="operation-formation-fields" data-operation-formations ${mode === "operation" ? "" : "hidden disabled"}>
+      <p class="muted">運用番号の数字部分を <code>**</code> に置き換えます。例 <code>32SH → **SH</code>、<code>39C● → **C●</code>、<code>A01 → A**</code>。設定は全ダイヤ共通です。運用番号が未記載・複数ある場合や、グループの入力欄が空欄の場合は種別の設定を使います。</p>
+      ${groups.length ? `<p class="muted">全ダイヤの${n(trainCount, 0)}本のうち、${n(groupedCount, 0)}本をグループ化できました。</p><div class="table-scroll"><table><thead><tr><th scope="col">運用番号グループ</th><th scope="col">運用番号の例</th><th scope="col">列車数（全ダイヤ）</th><th scope="col">輸送定員（人／編成）</th><th scope="col">編成両数</th></tr></thead><tbody>${groups.map(([group, { examples, count }], i) => {
+        const spec = caps?.operationGroups?.[group];
+        const cars = caps?.operationGroupCars?.[group] ?? spec?.carCount;
+        return `<tr><th scope="row"><code>${e(group)}</code></th><td>${e([...examples].join("、") || "—")}</td><td>${n(count, 0)}</td><td>${num("group-cap" + i, spec?.kind === "transport" ? spec.value : undefined, group + "の輸送定員", "1", 1)}</td><td>${num("group-cars" + i, cars, group + "の編成両数", "1", 1)}</td></tr>`;
+      }).join("")}</tbody></table></div>` : '<p class="muted">グループ化できる運用番号が見つかりませんでした。列車種別または列車別の設定を使用できます。</p>'}
+    </fieldset>`;
+}
+
+export function updateFormationSource(form: HTMLFormElement, mode: string) {
+  const panel = form.querySelector<HTMLFieldSetElement>("[data-operation-formations]")!;
+  panel.hidden = panel.disabled = mode !== "operation";
+}
+
+export function updateTrainCapacityHints(form: HTMLFormElement, p: Project, dia: Timetable) {
+  form.querySelectorAll<HTMLElement>("[data-capacity-hint]").forEach((hint, i) => {
+    const { spec, source } = capacityForTrain(p, dia.id, dia.trains[i]);
+    hint.textContent = source !== "train" && spec?.kind === "transport"
+      ? `継承値 ${n(spec.value, 0)} 人`
+      : "";
+  });
+}
 
 function shareFields(shares: number[], prefix: string) {
   return `<div class="period-fields">${periods
@@ -336,13 +394,14 @@ export function settingsBody(p: Project, dia: Timetable, draft?: LineDemand) {
       <div id="outside-areas">${d.outside.map((area, i) => areaCard(p, dia, area, i)).join("")}</div>
     </section>
     <section class="surface">
-      <div class="section-heading"><div><h2>営業区分と輸送定員</h2><p class="muted">定員は1編成あたりの人数です。車内図では種別の編成両数を使い、列車別の編成両数があればそちらを優先します。</p></div><button type="button" data-action="all-passenger">未確認の種別を営業に設定</button></div>
+      <div class="section-heading"><div><h2>営業区分と輸送定員</h2><p class="muted">定員は1編成あたりの人数です。列車別の定員・両数があればそちらを優先します。</p></div><button type="button" data-action="all-passenger">未確認の種別を営業に設定</button></div>
       <div class="fields">
         <label>最低乗換時間（秒）<input name="minimum-transfer-seconds" type="number" min="1" step="1" required value="${d.minimumTransferSeconds ?? defaultLineTransferSeconds}" aria-describedby="minimum-transfer-hint"></label>
         <label>乗車上限の混雑率（%）<input name="boarding-limit-percent" type="number" min="0" step="any" value="${d.boardingLimitPercent ?? ""}" placeholder="例：150" aria-describedby="boarding-limit-hint"></label>
       </div>
       <p id="minimum-transfer-hint" class="muted">乗換案内・混雑推計の全日区分に共通です。駅構内の移動に時間がかかる場合は値を大きくしてください。</p>
       <p id="boarding-limit-hint" class="muted">乗車上限は全日区分で共通です。空欄なら上限なし。指定の混雑率に達すると、乗り切れない利用者は目的地へ行ける後続便を待ちます。</p>
+      ${formationFields(p)}
       <div class="table-scroll"><table><thead><tr><th scope="col">列車種別</th><th scope="col">営業区分</th><th scope="col">輸送定員（人／編成）</th><th scope="col">編成両数</th></tr></thead>
       <tbody>${p.types
         .map((t, i) => {
@@ -355,18 +414,19 @@ export function settingsBody(p: Project, dia: Timetable, draft?: LineDemand) {
         .join("")}</tbody></table></div>
       <div class="fields single-field"><label>ダイヤ共通の輸送定員（人／編成、任意）${num("default-cap", p.capacitySettings?.timetables[dia.id]?.kind === "transport" ? p.capacitySettings.timetables[dia.id].value : undefined, "ダイヤ共通の輸送定員", "1")}</label></div>
       <details><summary>列車別の設定（${n(dia.trains.length, 0)}本）</summary>
-        <label class="train-filter">列車番号・種別で絞り込む<input type="search" id="train-filter"></label>
+        <label class="train-filter">列車番号・種別・運用番号で絞り込む<input type="search" id="train-filter"></label>
         <div class="table-scroll train-config"><table><thead><tr><th scope="col">列車</th><th scope="col">営業区分</th><th scope="col">輸送定員（人／編成）</th><th scope="col">編成両数</th></tr></thead>
         <tbody>${dia.trains
           .map((t, i) => {
             const key = trainClassKey(dia.id, t.id);
             const own = p.capacitySettings?.trains[key];
-            const resolved = capacitySpec(p, dia.id, t.id);
+            const resolved = capacityForTrain(p, dia.id, t).spec;
             const name = t.number || t.id;
             const type = p.types.find(({ id }) => id === t.typeId)?.name ?? "";
-            return `<tr data-train-row="${e(name + " " + type)}"><th scope="row">${e(name)} <small>${e(type)}・${t.direction === "down" ? "下り" : "上り"}</small></th>
+            const { numbers, group } = operationGroup(p, t);
+            return `<tr data-train-row="${e([name, type, ...numbers, group].join(" "))}"><th scope="row">${e(name)} <small>${e(type)}・${t.direction === "down" ? "下り" : "上り"}</small>${numbers.length ? `<small>運用 ${e(numbers.join("、"))}${group ? ` ／ <code>${e(group)}</code>` : ""}</small>` : ""}</th>
           <td><select name="train-class${i}" aria-label="${e(name)}の営業区分">${options([{ id: "", name: "種別に従う" }, ...classOptions], p.serviceClasses?.trains[key]?.state ?? "")}</select></td>
-          <td>${num("train-cap" + i, own?.kind === "transport" ? own.value : own ? undefined : t.capacity, name + "の輸送定員", "1")}${!own && resolved?.kind === "transport" && t.capacity === undefined ? `<small class="muted">継承値 ${n(resolved.value, 0)} 人</small>` : ""}</td>
+          <td>${num("train-cap" + i, own?.kind === "transport" ? own.value : own ? undefined : t.capacity, name + "の輸送定員", "1")}<small class="muted" data-capacity-hint>${!own && resolved?.kind === "transport" && t.capacity === undefined ? `継承値 ${n(resolved.value, 0)} 人` : ""}</small></td>
           <td>${num("cars" + i, own?.carCount, name + "の編成両数", "1")}</td></tr>`;
           })
           .join("")}</tbody></table></div>
@@ -515,6 +575,9 @@ export function applyTrainSettings(
     types: {},
   });
   const basis = "データ設定で登録";
+  const mode = picked("formation-source");
+  if (mode === "legacy") delete caps.formationSource;
+  else if (mode === "type" || mode === "operation") caps.formationSource = mode;
   const writeClass = (
     target: typeof classes.types,
     id: string,
@@ -569,6 +632,20 @@ export function applyTrainSettings(
     writeCap(caps.types, t.id, "cap" + i);
   });
   writeCap(caps.timetables, dia.id, "default-cap");
+  if (mode === "operation") {
+    const values = (caps.operationGroups ??= {});
+    const counts = (caps.operationGroupCars ??= {});
+    operationGroups(p).forEach(([id], i) => {
+      const cars = Number(picked("group-cars" + i)) || undefined;
+      const hasCapacity = !!picked("group-cap" + i);
+      writeCap(values, id, "group-cap" + i, cars);
+      if (!hasCapacity && cars) counts[id] = cars;
+      else delete counts[id];
+      if (!hasCapacity && values[id]?.carCount !== undefined) delete values[id].carCount;
+    });
+    if (!Object.keys(values).length) delete caps.operationGroups;
+    if (!Object.keys(counts).length) delete caps.operationGroupCars;
+  }
   dia.trains.forEach((t, i) => {
     const key = trainClassKey(dia.id, t.id);
     const cars = Number(picked("cars" + i)) || undefined;
