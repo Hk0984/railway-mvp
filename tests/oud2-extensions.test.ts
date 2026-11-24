@@ -79,6 +79,27 @@ describe("実ファイルで確認した書式の回帰", () => {
       29100,
     );
   });
+  it.each(["", "0,0", "1;/$0,2"])(
+    "excludes untimed nonempty train columns without renumbering timed ones (%j)",
+    (eki) => {
+      const { project, warnings } = parseOud2(
+        fixture({ eki }).replace(
+          "Ressya.\n.\n.\n.",
+          "Ressya.\n.\nRessya.\nSyubetsu=0\nEkiJikoku=1;900,1;925/\n.\n.\n.",
+        ),
+      );
+      const [dia] = project.timetables;
+      expect(dia.trains.map(({ id }) => id)).toEqual(["oud-0-Kudari-2"]);
+      expect(directTrains(dia, "oud-s0", "oud-s1")).toHaveLength(1);
+      expect(project.oud2!.emptyColumns).toBe(1);
+      expect(warnings).toContain("解析可能な駅時刻のない列車1件を除外しました");
+    },
+  );
+  it("reports when a file has no timed trains after exclusion", () => {
+    expect(() => parseOud2(fixture({ eki: "1,2" }))).toThrow(
+      "解析可能な時刻のある列車がありません",
+    );
+  });
   it("uses direction-order operation index for up trains", () => {
     const p = parseOud2(fixture({ up: true })).project;
     const t = p.timetables[0].trains[0];

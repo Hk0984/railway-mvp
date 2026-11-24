@@ -229,6 +229,7 @@ export function parseOud2(
     };
   });
   let emptyColumns = 0,
+    untimedTrains = 0,
     overnightTimes = 0;
   const operationCodes = new Set<number>();
   const timetables = children(rosen, "Dia").map((d, di) => ({
@@ -301,14 +302,12 @@ export function parseOud2(
             track: m![3],
           };
         });
-        if (
-          !stops.some(
-            (s) => s.arrival !== undefined || s.departure !== undefined,
-          )
-        )
-          fail("解析可能な時刻のない非空列車");
         if (v.Canceled !== undefined && !["0", "1"].includes(v.Canceled))
           fail("Canceledは0/1が必要です");
+        if (last === -1) {
+          untimedTrains++;
+          return [];
+        }
         const train: Train = {
           id: `oud-${di}-${dir.name}-${ti}`,
           number: v.Ressyabangou ?? "",
@@ -387,10 +386,16 @@ export function parseOud2(
       });
     }),
   }));
-  if (!timetables.length || !timetables.some((d) => d.trains.length))
-    throw new Error("ダイヤ・列車を抽出できませんでした");
+  if (!timetables.some((d) => d.trains.length))
+    throw new Error(
+      untimedTrains
+        ? "解析可能な時刻のある列車がありません"
+        : "ダイヤ・列車を抽出できませんでした",
+    );
   if (emptyColumns)
     warnings.add(`空の時刻表列${emptyColumns}件を列車数から除外しました`);
+  if (untimedTrains)
+    warnings.add(`解析可能な駅時刻のない列車${untimedTrains}件を除外しました`);
   if (overnightTimes)
     warnings.add(
       `運行日起点より前の明示時刻${overnightTimes}項目を翌日として正規化しました。原EkiJikokuは保持しています`,

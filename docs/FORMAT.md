@@ -17,7 +17,7 @@
 
 文字コードは自動の場合UTF-8を厳密デコードし、失敗時だけShift_JISを試します。UIから明示指定も可能。実際に用いた文字コードはJSON内に保存します。
 
-`Rosen > Eki / Ressyasyubetsu / Dia > Kudari・Nobori > Ressya` を読み込みます。複数Diaを保持し、駅・種別は共通です。複数Rosenは未対応です。完全に空のRessyaは空欄列として件数を記録して除外します。Houkou等がある非空列車の不正・欠落はエラーです。
+`Rosen > Eki / Ressyasyubetsu / Dia > Kudari・Nobori > Ressya` を読み込みます。複数Diaを保持し、駅・種別は共通です。複数Rosenは未対応です。完全に空のRessyaは空欄列として件数を記録して除外します。EkiJikokuはあるものの着時刻・発時刻が1件もない列車も除外し、空欄列とは別に件数を記録します。EkiJikoku自体の欠落や不正な時刻表記はエラーです。
 
 ## 時刻と運行日
 
