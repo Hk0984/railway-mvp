@@ -2,6 +2,7 @@ import { expect, it } from "vitest";
 import { transportCapacity, trainCarCount } from "../src/capacity-model";
 import type { Train } from "../src/model";
 import { operationGroup, operationNumbers } from "../src/operation-numbers";
+import { settingsBody } from "../src/renewal-settings";
 import { sampleProject } from "../src/sample";
 
 function train(
@@ -178,4 +179,48 @@ it("requires a matching next-train operation and a known track on a running trai
   const cancelled = fixture();
   cancelled.a.cancelled = true;
   expect(operationGroup(cancelled.p, cancelled.b).group).toBeNull();
+});
+
+it("lists the recorded endpoint times only for active trains with no operation group", () => {
+  const { p } = fixture();
+  const [dia] = p.timetables;
+  expect(settingsBody(p, dia)).not.toContain("data-ungrouped-operation-trains");
+  const unresolved = train("unresolved", 0, 90510, 91200, ["0", "1"]);
+  unresolved.operationNumbers = ["xK"];
+  const cancelled = train("cancelled", 0, 90510, 91200, ["0", "1"]);
+  cancelled.cancelled = true;
+  dia.trains.push(unresolved, cancelled);
+  const missingArrival = train(
+    "external-with-missing-arrival",
+    0,
+    93000,
+    93600,
+    ["0", "1"],
+  );
+  missingArrival.stops[1].departure = missingArrival.stops[1].arrival;
+  delete missingArrival.stops[1].arrival;
+  p.oud2!.externalTerminals.push({
+    id: "external",
+    boundaryStationId: "s0",
+    name: "路線外駅",
+  });
+  missingArrival.externalOrigin = {
+    terminalId: "external",
+    boundaryStationId: "s0",
+    positionId: "p0",
+    raw: "",
+    externalTime: 92580,
+  };
+  p.timetables.push({ id: "holiday", name: "休日", trains: [missingArrival] });
+
+  const list = settingsBody(p, dia)
+    .split("data-ungrouped-operation-trains")[1]
+    ?.split("</details>")[0];
+  expect(list).toContain("運用番号でグループ化できない列車（2本）");
+  expect(list).toContain(p.stations[0].name + " 25:08:30");
+  expect(list).toContain(p.stations[1].name + " 25:20");
+  expect(list).toContain("休日");
+  expect(list).toContain("路線外駅 25:43");
+  expect(list).toContain(p.stations[1].name + " 着時刻未記載");
+  expect(list).not.toContain("cancelled");
 });

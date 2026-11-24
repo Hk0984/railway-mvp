@@ -1,4 +1,5 @@
 import { drawHourlyDemand } from "./hourly-demand-preview";
+import { clock, trainVisits } from "./analysis";
 import { capacityForTrain } from "./capacity-model";
 import {
   classLabels,
@@ -21,7 +22,7 @@ import {
   type LineDemand,
   type OutsideArea,
 } from "./line-demand";
-import type { Project, Timetable } from "./model";
+import type { Project, Timetable, Train } from "./model";
 import { isOperationPattern, operationGroup } from "./operation-numbers";
 import {
   defaultPurposeShares,
@@ -122,15 +123,19 @@ const num = (
 
 function operationGroups(p: Project) {
   const groups = new Map<string, { examples: Set<string>; count: number; inherited: number }>();
+  const ungrouped: { timetable: string; train: Train }[] = [];
   const get = (id: string) => {
     if (!groups.has(id)) groups.set(id, { examples: new Set(), count: 0, inherited: 0 });
     return groups.get(id)!;
   };
-  for (const { trains } of p.timetables)
+  for (const { name, trains } of p.timetables)
     for (const train of trains) {
       if (train.cancelled) continue;
       const { group, numbers, inheritedFrom } = operationGroup(p, train);
-      if (!group) continue;
+      if (!group) {
+        ungrouped.push({ timetable: name, train });
+        continue;
+      }
       const row = get(group);
       row.count++;
       if (inheritedFrom) row.inherited++;
@@ -138,7 +143,42 @@ function operationGroups(p: Project) {
     }
   for (const map of [p.capacitySettings?.operationGroups, p.capacitySettings?.operationGroupCars])
     for (const id of Object.keys(map ?? {})) if (isOperationPattern(id)) get(id);
-  return [...groups].sort(([a], [b]) => a.localeCompare(b));
+  return { groups: [...groups].sort(([a], [b]) => a.localeCompare(b)), ungrouped };
+}
+
+function ungroupedOperationTrains(
+  p: Project,
+  trains: readonly { timetable: string; train: Train }[],
+) {
+  if (!trains.length) return "";
+  const stations = new Map(p.stations.map(({ id, name }) => [id, name]));
+  const terminals = new Map(
+    p.oud2?.externalTerminals.map(({ id, name }) => [id, name]),
+  );
+  const types = new Map(p.types.map(({ id, name }) => [id, name]));
+  const rows = trains.map(({ timetable, train }) => {
+    const visits = trainVisits(train);
+    const first = visits[0];
+    const last = visits.at(-1);
+    const { externalOrigin, externalDestination } = train;
+    const from = externalOrigin
+      ? terminals.get(externalOrigin.terminalId)
+      : stations.get(first?.stationId ?? "");
+    const to = externalDestination
+      ? terminals.get(externalDestination.terminalId)
+      : stations.get(last?.stationId ?? "");
+    const departure = externalOrigin ? externalOrigin.externalTime : first?.departure;
+    const arrival = externalDestination ? externalDestination.externalTime : last?.arrival;
+    const direction = train.direction === "down" ? "下り" : "上り";
+    return `<tr>
+      <td>${e(timetable)}</td>
+      <th scope="row">${e(train.number || train.id)}<small>${e(types.get(train.typeId) ?? train.typeId)}・${direction}</small></th>
+      <td>${e(from ?? "不明")} ${departure === undefined ? "発時刻未記載" : clock(departure)}</td>
+      <td>${e(to ?? "不明")} ${arrival === undefined ? "着時刻未記載" : clock(arrival)}</td>
+    </tr>`;
+  });
+  return `<details open data-ungrouped-operation-trains><summary>運用番号でグループ化できない列車（${n(trains.length, 0)}本）</summary>
+    <div class="table-scroll train-config" role="region" tabindex="0" aria-label="運用番号でグループ化できない列車の一覧"><table><thead><tr><th scope="col">ダイヤ</th><th scope="col">列車</th><th scope="col">始発駅・発時刻</th><th scope="col">終着駅・着時刻</th></tr></thead><tbody>${rows.join("")}</tbody></table></div></details>`;
 }
 
 function formationFields(p: Project) {
@@ -150,10 +190,10 @@ function formationFields(p: Project) {
   const hasLegacy = Object.keys(caps?.operationGroups ?? {}).some((id) => /^[A-Z]+$/.test(id));
   if (hasLegacy) modes.push({ id: "legacy", name: "保存済みの旧運用記号設定を使用" });
   const mode = caps?.formationSource ?? (hasLegacy ? "legacy" : "type");
-  const groups = operationGroups(p);
+  const { groups, ungrouped } = operationGroups(p);
   const groupedCount = groups.reduce((total, [, { count }]) => total + count, 0);
   const inheritedCount = groups.reduce((total, [, { inherited }]) => total + inherited, 0);
-  const trainCount = p.timetables.reduce((total, dia) => total + dia.trains.filter((train) => !train.cancelled).length, 0);
+  const trainCount = groupedCount + ungrouped.length;
   return `<div class="fields single-field"><label>編成の設定方法<select name="formation-source">${options(modes, mode)}</select></label></div>
     <fieldset class="operation-formation-fields" data-operation-formations ${mode === "operation" ? "" : "hidden disabled"}>
       <p class="muted">運用番号の数字部分を <code>**</code> に置き換えます。例 <code>32SH → **SH</code>、<code>39C● → **C●</code>、<code>A01 → A**</code>。番線と時刻から前列車接続が一意に決まる場合は、前列車の運用番号を引き継ぎます。設定は全ダイヤ共通です。運用番号が未確定の場合やグループの入力欄が空欄の場合は、種別の設定を使います。</p>
@@ -162,6 +202,7 @@ function formationFields(p: Project) {
         const cars = caps?.operationGroupCars?.[group] ?? spec?.carCount;
         return `<tr><th scope="row"><code>${e(group)}</code></th><td>${e([...examples].join("、") || "—")}</td><td>${n(count, 0)}</td><td>${num("group-cap" + i, spec?.kind === "transport" ? spec.value : undefined, group + "の輸送定員", "1", 1)}</td><td>${num("group-cars" + i, cars, group + "の編成両数", "1", 1)}</td></tr>`;
       }).join("")}</tbody></table></div>` : '<p class="muted">グループ化できる運用番号が見つかりませんでした。列車種別または列車別の設定を使用できます。</p>'}
+      ${ungroupedOperationTrains(p, ungrouped)}
     </fieldset>`;
 }
 
@@ -637,7 +678,7 @@ export function applyTrainSettings(
   if (mode === "operation") {
     const values = (caps.operationGroups ??= {});
     const counts = (caps.operationGroupCars ??= {});
-    operationGroups(p).forEach(([id], i) => {
+    operationGroups(p).groups.forEach(([id], i) => {
       const cars = Number(picked("group-cars" + i)) || undefined;
       const hasCapacity = !!picked("group-cap" + i);
       writeCap(values, id, "group-cap" + i, cars);
