@@ -12,10 +12,14 @@ export interface CapacitySettings {
   formationSource?: "type" | "operation";
   operationGroups?: Record<string, CapacitySpec>;
   operationGroupCars?: Record<string, number>;
+  ungroupedOperationCapacity?: number;
   timetables: Record<string, CapacitySpec>;
   trains: Record<string, CapacitySpec>;
   types: Record<string, CapacitySpec>;
 }
+export type CapacitySource =
+  "train" | "operation" | "ungrouped" | "type" | "unknown";
+
 export function capacitySpec(
   p: Project,
   diaId: string,
@@ -33,7 +37,9 @@ function configuredOperationGroup(p: Project, train: Train) {
   if (
     !c ||
     c.formationSource === "type" ||
-    (!c.operationGroups && !c.operationGroupCars)
+    (!c.operationGroups &&
+      !c.operationGroupCars &&
+      c.ungroupedOperationCapacity === undefined)
   )
     return null;
   return operationGroup(p, train, c.formationSource === undefined).group;
@@ -45,7 +51,7 @@ export function capacityForTrain(
   train: Train,
 ): {
   spec: CapacitySpec | null;
-  source: "train" | "operation" | "type" | "unknown";
+  source: CapacitySource;
 } {
   const c = p.capacitySettings;
   const individual = c?.trains[trainClassKey(diaId, train.id)];
@@ -62,6 +68,20 @@ export function capacityForTrain(
   const group = configuredOperationGroup(p, train);
   const operation = group && c?.operationGroups?.[group];
   if (operation) return { spec: operation, source: "operation" };
+  if (
+    c?.formationSource === "operation" &&
+    c.ungroupedOperationCapacity !== undefined &&
+    !train.cancelled &&
+    !group
+  )
+    return {
+      spec: {
+        value: c.ungroupedOperationCapacity,
+        kind: "transport",
+        basis: "未分類列車の仮輸送定員",
+      },
+      source: "ungrouped",
+    };
   const type = c?.types[train.typeId];
   if (type) return { spec: type, source: "type" };
   const typeCapacity = p.typeCapacities?.[train.typeId];
@@ -105,6 +125,12 @@ export function validateCapacitySettings(p: Project) {
     !["type", "operation"].includes(c.formationSource)
   )
     throw new Error("編成設定方法が不正です");
+  if (
+    c.ungroupedOperationCapacity !== undefined &&
+    (!Number.isSafeInteger(c.ungroupedOperationCapacity) ||
+      c.ungroupedOperationCapacity <= 0)
+  )
+    throw new Error("未分類列車の仮輸送定員は1以上の整数を入力してください");
   if (
     c.operationGroupCars !== undefined &&
     (!c.operationGroupCars ||

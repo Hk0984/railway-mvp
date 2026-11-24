@@ -2,6 +2,7 @@ import type { Direction, Purpose, Stop } from "./model";
 import type { TimedOD } from "./temporal-model";
 import type { Journey } from "./routing-model";
 import type { CapacityOutcome } from "./capacity-assignment";
+import type { CapacitySource } from "./capacity-model";
 import {
   validateArrivalModel,
   type ArrivalModel,
@@ -87,7 +88,7 @@ export interface TrainLoad {
   peakLoad: number;
   peakSegments: number[];
   capacity: number | null;
-  capacitySource: "train" | "type" | "operation" | "unknown";
+  capacitySource: CapacitySource;
   occupancies: (number | null)[];
   peakOccupancy: number | null;
 }

@@ -647,6 +647,10 @@ th small {
 .journey-train span {
   color: var(--muted);
 }
+.journey-car-count {
+  margin-inline-start: 0.35rem;
+  white-space: nowrap;
+}
 .transfer-note {
   margin: 0.55rem 0;
   color: var(--muted);

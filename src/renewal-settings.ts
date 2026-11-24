@@ -196,12 +196,14 @@ function formationFields(p: Project) {
   const trainCount = groupedCount + ungrouped.length;
   return `<div class="fields single-field"><label>編成の設定方法<select name="formation-source">${options(modes, mode)}</select></label></div>
     <fieldset class="operation-formation-fields" data-operation-formations ${mode === "operation" ? "" : "hidden disabled"}>
-      <p class="muted">運用番号の数字部分を <code>**</code> に置き換えます。例 <code>32SH → **SH</code>、<code>39C● → **C●</code>、<code>A01 → A**</code>。番線と時刻から前列車接続が一意に決まる場合は、前列車の運用番号を引き継ぎます。設定は全ダイヤ共通です。運用番号が未確定の場合やグループの入力欄が空欄の場合は、種別の設定を使います。</p>
+      <p class="muted">運用番号の数字部分を <code>**</code> に置き換えます。例 <code>32SH → **SH</code>、<code>39C● → **C●</code>、<code>A01 → A**</code>。番線と時刻から前列車接続が一意に決まる場合は、前列車の運用番号を引き継ぎます。設定は全ダイヤ共通です。グループの入力欄が空欄の場合は種別の設定を使います。</p>
       ${groups.length ? `<p class="muted">全ダイヤの${n(trainCount, 0)}本のうち、${n(groupedCount, 0)}本をグループ化しました${inheritedCount ? `（うち${n(inheritedCount, 0)}本は前列車から継承）` : ""}。</p><div class="table-scroll"><table><thead><tr><th scope="col">運用番号グループ</th><th scope="col">運用番号の例</th><th scope="col">列車数（全ダイヤ）</th><th scope="col">輸送定員（人／編成）</th><th scope="col">編成両数</th></tr></thead><tbody>${groups.map(([group, { examples, count }], i) => {
         const spec = caps?.operationGroups?.[group];
         const cars = caps?.operationGroupCars?.[group] ?? spec?.carCount;
         return `<tr><th scope="row"><code>${e(group)}</code></th><td>${e([...examples].join("、") || "—")}</td><td>${n(count, 0)}</td><td>${num("group-cap" + i, spec?.kind === "transport" ? spec.value : undefined, group + "の輸送定員", "1", 1)}</td><td>${num("group-cars" + i, cars, group + "の編成両数", "1", 1)}</td></tr>`;
       }).join("")}</tbody></table></div>` : '<p class="muted">グループ化できる運用番号が見つかりませんでした。列車種別または列車別の設定を使用できます。</p>'}
+      <div class="fields single-field"><label>未分類列車の仮輸送定員（人／編成、任意）${num("ungrouped-operation-capacity", caps?.ungroupedOperationCapacity, "未分類列車の仮輸送定員（人／編成）", "1", 1)}</label></div>
+      <p class="muted">全ダイヤの未分類列車に共通です。列車別の定員を優先します。空欄の場合は、種別やダイヤ共通の定員を使います。</p>
       ${ungroupedOperationTrains(p, ungrouped)}
     </fieldset>`;
 }
@@ -676,6 +678,9 @@ export function applyTrainSettings(
   });
   writeCap(caps.timetables, dia.id, "default-cap");
   if (mode === "operation") {
+    const provisional = picked("ungrouped-operation-capacity");
+    if (provisional) caps.ungroupedOperationCapacity = Number(provisional);
+    else delete caps.ungroupedOperationCapacity;
     const values = (caps.operationGroups ??= {});
     const counts = (caps.operationGroupCars ??= {});
     operationGroups(p).groups.forEach(([id], i) => {

@@ -293,6 +293,21 @@ it("omits passes in presentation while preserving routing data and uses the full
   expect(v.departureTrack).toBe("3番線");
   expect(v.arrivalTrack).toBe("7番線");
 });
+it("shows the formation assigned to the train of each journey leg", () => {
+  const p = fixture();
+  const journeyLeg = leg(p);
+  const caps = p.capacitySettings!;
+  caps.formationSource = "operation";
+  caps.operationGroupCars = { "**C": 6 };
+  expect(legPresentation(p, journeyLeg).carCount).toBe(6);
+  caps.trains['["weekday","t"]'] = {
+    value: 400,
+    kind: "transport",
+    basis: "列車別",
+    carCount: 8,
+  };
+  expect(legPresentation(p, journeyLeg).carCount).toBe(8);
+});
 it("uses external destination metadata without generating an external ride", () => {
   const p = fixture(),
     l = leg(p),

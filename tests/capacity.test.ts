@@ -244,6 +244,39 @@ describe("定員制約の時系列配分", () => {
     p.types[0].carCount = 0;
     expect(() => validateProject(p)).toThrow("種別の編成両数");
   });
+  it("applies the provisional capacity only to ungrouped trains in operation mode", () => {
+    const a = train("a", 100, 200);
+    const b = train("b", 500, 600);
+    b.operationNumbers = ["32D"];
+    const p = project([a, b]);
+    const caps = (p.capacitySettings = {
+      formationSource: "operation",
+      ungroupedOperationCapacity: 60,
+      trains: {},
+      types: { local: { value: 90, kind: "transport", basis: "種別" } },
+      timetables: {},
+    });
+    expect(transportCapacity(p, "d", "a")).toBe(60);
+    expect(transportCapacity(p, "d", "b")).toBe(90);
+    const r = assignDemand(
+      buildRoutingIndex([{ datasetId: "cap", project: p, timetableId: "d" }]),
+      [row()],
+      config(),
+    );
+    expect(r.capacity!.loads.find((l) => l.trainId === "a")).toMatchObject({
+      capacity: 60,
+      capacitySource: "ungrouped",
+      segmentLoads: [60],
+    });
+    p.capacitySettings!.formationSource = "type";
+    expect(transportCapacity(p, "d", "a")).toBe(90);
+    p.capacitySettings!.formationSource = "operation";
+    a.capacity = 100;
+    expect(transportCapacity(p, "d", "a")).toBe(100);
+    validateProject(JSON.parse(JSON.stringify(p)));
+    caps.ungroupedOperationCapacity = 0;
+    expect(() => validateProject(p)).toThrow("未分類列車の仮輸送定員");
+  });
   it("does not use non-passenger trains", () => {
     const a = train("a", 100, 200, 60),
       b = train("b", 300, 400, 100);

@@ -184,7 +184,7 @@ export function journeyCards(
             colors.get(leg.typeId)?.timetable ?? defaultTrainTypeColor;
           return `<li>
           ${i > 0 ? `<p class="transfer-note">乗換待ち ${n(j.transfers[i - 1].waitingSeconds / 60)}分</p>` : ""}
-          <p class="journey-train"><strong class="journey-type" style="--type-color:${color}">${e(leg.typeName)}</strong> <span>${e(view.destination)} 行</span>${leg.trainNumber ? ` <small>${e(leg.trainNumber)}</small>` : ""}</p>
+          <p class="journey-train"><strong class="journey-type" style="--type-color:${color}">${e(leg.typeName)}</strong> <span>${e(view.destination)} 行</span>${leg.trainNumber ? ` <small>${e(leg.trainNumber)}</small>` : ""} <small class="journey-car-count">${view.carCount === undefined ? "編成両数未登録" : `${n(view.carCount, 0)}両編成`}</small></p>
           ${timetableStops(leg, view, station, byTrain.get(leg.trainId))}
         </li>`;
         })
