@@ -91,7 +91,8 @@ function trackStays(
     }
   }
 
-  // An inconsistent move cannot establish which track held the train.
+  // Invalid times obscure the stay on the tracks involved. A missing track
+  // also makes the other tracks at this station possible.
   const moves = [...before, ...after];
   if (
     moves.some(({ from, to }) => !(from <= to)) ||
@@ -109,13 +110,14 @@ function trackStays(
       departure,
       ...moves.flatMap(({ from, to }) => [from, to]),
     ].filter(Number.isFinite);
-    return [
-      {
-        track: moves.length ? undefined : stop.track,
-        start: Math.min(...known),
-        end: Math.max(...known),
-      },
-    ];
+    const tracks = new Set([stop.track, ...moves.map(({ track }) => track)]);
+    const start = Math.min(...known);
+    const end = Math.max(...known);
+    return (tracks.has(undefined) ? [undefined] : [...tracks]).map((track) => ({
+      track,
+      start,
+      end,
+    }));
   }
   return stays;
 }

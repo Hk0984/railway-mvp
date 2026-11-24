@@ -115,6 +115,47 @@ it("blocks the link where a different train uses the connection track in between
   expect(operationGroup(p, b).group).toBeNull();
 });
 
+function changeAtStation(kind: 1 | 2, track: string) {
+  const { p } = fixture();
+  const arriving = train("801C", 0, 23910, 25620, ["3", track]);
+  arriving.operationNumbers = ["01C"];
+  arriving.operations![1].raw = "5/$" + kind;
+  const departing = train("803C", 1, 25680, 26880, [track, "0"]);
+  departing.direction = "down";
+  departing.typeId = kind === 1 ? "rapid" : arriving.typeId;
+  departing.stops[1].stationId = "s2";
+  departing.stops[1].positionId = "p2";
+  departing.operations![1].positionId = "p2";
+
+  const shunting = train("shunt", 1, 25710, 26300, ["4", "0"]);
+  shunting.stops[0].arrival = 25620;
+  shunting.operations = [
+    { positionId: "p1", phase: "after", code: 0, raw: "0/2$708/710$0" },
+  ];
+  p.timetables[0].trains = [arriving, departing, shunting];
+  return { p, arriving, departing };
+}
+
+it.each([1, 2] as const)(
+  "inherits the same number for junction type %i across a different track's shunt",
+  (kind) => {
+    const { p, arriving, departing } = changeAtStation(kind, "1");
+    expect(operationGroup(p, departing)).toMatchObject({
+      numbers: ["01C"],
+      group: "**C",
+      inheritedFrom: arriving,
+    });
+  },
+);
+
+it.each(["2", "4"])(
+  "keeps an ambiguous shunt from joining trains on its track %s",
+  (track) => {
+    const { p, departing } = changeAtStation(1, track);
+    expect(operationGroup(p, departing).group).toBeNull();
+  },
+);
+
 it("skips simultaneous competing connections and connections across timetables", () => {
   const { p, b, c } = fixture();
   p.timetables[0].trains.push(train("other", 0, 88800, 89800, ["1", "4"]));
