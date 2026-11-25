@@ -285,6 +285,7 @@ function search() {
         "検索対象の営業列車がありません。データ設定で営業区分を確認してください。",
       );
     const { journeys, reason, displayLimited } = searchJourneys(index, {
+      formationContinuations: true,
       origin: { datasetId: project.datasetId!, stationId: route.origin },
       destination: {
         datasetId: project.datasetId!,

@@ -174,25 +174,46 @@ export function journeyCards(
     overview +
     legend +
     journeys
-      .map(
-        (j, index) =>
-          `<section class="journey-card" id="journey-detail-${index}" aria-label="経路候補${index + 1}の詳細" ${index === selected ? "" : "hidden"}>
+      .map((j, index) => {
+        let transferIndex = 0;
+        return `<section class="journey-card" id="journey-detail-${index}" aria-label="経路候補${index + 1}の詳細" ${index === selected ? "" : "hidden"}>
       <ol class="journey-legs">${j.legs
         .map((leg, i) => {
           const view = legPresentation(project, leg);
-          const formations = view.formationCars?.length ? view.formationCars : [view.carCount];
-          const formationText = formations.map(cars => cars === undefined ? "編成両数未登録" : `${n(cars, 0)}両編成`).join(" → ");
+          const next = j.legs[i + 1];
+          const portion =
+            next?.continuation === "split"
+              ? legPresentation(project, next).destination
+              : undefined;
+          const operationStation = station(leg.origin.stationId);
+          const connection =
+            leg.continuation === "couple"
+              ? `${operationStation}で増結 · そのまま乗車`
+              : leg.continuation === "split"
+                ? `${operationStation}で解結 · ${view.destination}方面の編成に乗ったまま`
+                : i > 0
+                  ? `乗換待ち ${n(j.transfers[transferIndex++].waitingSeconds / 60)}分`
+                  : "";
+          const formations = view.formationCars?.length
+            ? view.formationCars
+            : [view.carCount];
+          const formationText = formations
+            .map((cars) =>
+              cars === undefined ? "編成両数未登録" : `${n(cars, 0)}両編成`,
+            )
+            .join(" → ");
           const color =
             colors.get(leg.typeId)?.timetable ?? defaultTrainTypeColor;
           return `<li>
-          ${i > 0 ? `<p class="transfer-note">乗換待ち ${n(j.transfers[i - 1].waitingSeconds / 60)}分</p>` : ""}
+          ${connection ? `<p class="transfer-note">${e(connection)}</p>` : ""}
           <p class="journey-train"><strong class="journey-type" style="--type-color:${color}">${e(leg.typeName)}</strong> <span>${e(view.destination)} 行</span>${leg.trainNumber ? ` <small>${e(leg.trainNumber)}</small>` : ""} <small class="journey-car-count">${formationText}</small></p>
+          ${portion ? `<p class="transfer-note">乗車時は${e(portion)}方面の編成を選択</p>` : ""}
           ${timetableStops(leg, view, station, byTrain.get(leg.trainId))}
         </li>`;
         })
         .join("")}</ol>
-    </section>`,
-      )
+    </section>`;
+      })
       .join("")
   );
 }

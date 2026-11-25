@@ -1,4 +1,11 @@
-import type { Project, StationOperation, Stop, Train } from "./model";
+import { trainVisits } from "./analysis";
+import type {
+  Project,
+  StationOperation,
+  Stop,
+  Timetable,
+  Train,
+} from "./model";
 import { parseOudTime } from "./oud2-text";
 
 interface TrackStay {
@@ -196,4 +203,178 @@ function findPredecessors(project: Project) {
     }
   }
   return result;
+}
+
+export interface FormationConnection {
+  from: Train;
+  fromIndex: number;
+  to: Train;
+  toIndex: number;
+  kind: "couple" | "split";
+}
+
+type FormationPoint = {
+  train: Train;
+  index: number;
+  time: number;
+  referenceTime?: number;
+  track: string;
+};
+
+function connectionTime(op: StationOperation, dayStart: number) {
+  const syntax =
+    op.phase === "after" ? /^5\/(\d*)\$[0-3]$/ : /^5\/(\d*)\$[^$]*$/;
+  const timeField = syntax.exec(op.raw)?.[1];
+  return timeField === undefined ? NaN : operationTime(timeField, dayStart);
+}
+
+export function passengerFormationConnections(
+  project: Project,
+  timetable: Timetable,
+) {
+  if (project.oud2?.fileType !== "OuDiaSecond.1.17") return [];
+  const dayStart = project.oud2.serviceDayStart;
+  type Endpoint = FormationPoint & { side: "before" | "after" };
+  type Work = FormationPoint & { kind: FormationConnection["kind"] };
+  type Station = {
+    stays: (TrackStay & { train: Train })[];
+    endpoints: Endpoint[];
+    works: Work[];
+  };
+  const stations = new Map<string, Station>();
+  for (const train of timetable.trains) {
+    if (train.cancelled) continue;
+    const visits = trainVisits(train);
+    if (visits.length < 2) continue;
+    const visitIndices = new Map(
+      visits.flatMap((visit, i) =>
+        (visit.sourcePositionIds ?? []).map((id) => [id, i] as const),
+      ),
+    );
+    const operations = new Map<string, StationOperation[]>();
+    const shuntingVisits = new Set<number | undefined>();
+    for (const op of train.operations ?? []) {
+      const list = operations.get(op.positionId) ?? [];
+      list.push(op);
+      operations.set(op.positionId, list);
+      if (op.code === 0) shuntingVisits.add(visitIndices.get(op.positionId));
+    }
+    for (const stop of train.stops) {
+      const index = visitIndices.get(stop.positionId ?? "");
+      if (
+        stop.status === "none" ||
+        index === undefined ||
+        (stop.arrival === undefined && stop.departure === undefined)
+      )
+        continue;
+      const station = stations.get(stop.stationId) ?? {
+        stays: [],
+        endpoints: [],
+        works: [],
+      };
+      stations.set(stop.stationId, station);
+      const ops = operations.get(stop.positionId!) ?? [];
+      const first = index === 0;
+      const last = index === visits.length - 1;
+      for (const stay of trackStays(stop, ops, first, last, dayStart))
+        station.stays.push({ ...stay, train });
+      // The file has no passenger-carrying flag for a shunt. Match same-platform connections only.
+      if (!stop.track || shuntingVisits.has(index)) continue;
+      const point = { train, index, track: stop.track };
+      for (const op of ops) {
+        if (
+          op.code === 5 &&
+          stop.status === "stop" &&
+          (op.phase === "before" ? first : last) &&
+          ops.filter((work) => work.phase === op.phase).length === 1
+        ) {
+          const time = op.phase === "before" ? stop.departure : stop.arrival;
+          const referenceTime = connectionTime(op, dayStart);
+          if (time !== undefined && !Number.isNaN(referenceTime))
+            station.endpoints.push({
+              ...point,
+              side: op.phase,
+              time,
+              referenceTime,
+            });
+        }
+        if (
+          (op.code !== 1 && op.code !== 2) ||
+          op.children?.length !== 1 ||
+          op.children[0].code !== 5
+        )
+          continue;
+        const kind = op.code === 1 ? "couple" : "split";
+        const syntax =
+          kind === "couple"
+            ? /^1\/[01]\$(\d*)$/
+            : /^2\/[0-2]\$(?:[1-9]|10)\/(\d*)$/;
+        const time = operationTime(syntax.exec(op.raw)?.[1] ?? "", dayStart);
+        const referenceTime = connectionTime(op.children[0], dayStart);
+        if (
+          time === undefined ||
+          Number.isNaN(time) ||
+          Number.isNaN(referenceTime) ||
+          (stop.arrival !== undefined && time < stop.arrival) ||
+          (stop.departure !== undefined && time > stop.departure) ||
+          (kind === "couple"
+            ? last || stop.departure === undefined
+            : first || stop.arrival === undefined)
+        )
+          continue;
+        station.works.push({ ...point, kind, time, referenceTime });
+      }
+    }
+  }
+  const links: FormationConnection[] = [];
+  for (const { stays, endpoints, works } of stations.values()) {
+    const matches = new Map<Work, Endpoint[]>();
+    const endpointMatches = new Map<Endpoint, number>();
+    for (const work of works) {
+      const join = work.kind === "couple";
+      const candidates = endpoints.filter((end) => {
+        if (
+          end.side !== (join ? "after" : "before") ||
+          end.train === work.train ||
+          end.train.direction !== work.train.direction ||
+          end.track !== work.track
+        )
+          return false;
+        const start = join ? end.time : work.time;
+        const finish = join ? work.time : end.time;
+        return (
+          start <= finish &&
+          [work.referenceTime, end.referenceTime].every(
+            (time) => time === undefined || (start <= time && time <= finish),
+          ) &&
+          !stays.some(
+            (stay) =>
+              stay.train !== work.train &&
+              stay.train !== end.train &&
+              (stay.track === undefined || stay.track === work.track) &&
+              stay.start <= finish &&
+              start <= stay.end,
+          )
+        );
+      });
+      matches.set(work, candidates);
+      for (const end of candidates)
+        endpointMatches.set(end, (endpointMatches.get(end) ?? 0) + 1);
+    }
+    for (const [work, candidates] of matches) {
+      if (candidates.length !== 1 || endpointMatches.get(candidates[0]) !== 1)
+        continue;
+      const endpoint = candidates[0];
+      const [from, to] =
+        work.kind === "couple" ? [endpoint, work] : [work, endpoint];
+      links.push({
+        from: from.train,
+        fromIndex: from.index,
+        to: to.train,
+        toIndex: to.index,
+        kind: work.kind,
+      });
+    }
+  }
+  return links;
 }

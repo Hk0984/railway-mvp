@@ -205,7 +205,7 @@ export function parseOud2(
   const branchCount = positions.filter((x) => x.branchCorePositionId).length;
   if (branchCount)
     warnings.add(
-      `分岐の派生行${branchCount}件を基幹駅IDへ統合しました。時刻表行と原時刻は別途保持し、同名だけでは駅を統合しません。乗換経路検索は未対応です`,
+      `分岐の派生行${branchCount}件を基幹駅IDへ統合しました。時刻表行と原時刻は別途保持し、同名だけでは駅を統合しません`,
     );
   const types = children(rosen, "Ressyasyubetsu").map((n, i) => {
     if (!n.values.Syubetsumei) throw new Error("種別名がありません");
@@ -423,7 +423,7 @@ export function parseOud2(
     );
   if (operationCodes.size)
     warnings.add(
-      `駅作業（コード${[...operationCodes].sort().join("/")}）の原文を保持。路線外発着以外の入換・入出区・列車接続・運用番号は運用シミュレーションや旅客直通の連結に使用しません`,
+      `駅作業（コード${[...operationCodes].sort().join("/")}）の原文を保持。乗換案内では、FileType 1.17の増結・解結で一意に確認できた乗車継続を扱います`,
     );
   warnings.add(
     "人口等の都市属性は原ファイルにないため初期値0。回送・試運転等の営業可否は推測しません。集計対象の種別を確認してください",
