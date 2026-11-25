@@ -24,6 +24,7 @@ export interface PlotView {
   pixelsPerHour: number;
 }
 export interface DiagramRenderSettings {
+  emphasisTypeId?: string;
   lineWidth: number;
   enabled: boolean;
   selectedOnly: boolean;
@@ -67,7 +68,11 @@ function strokeLine(path: Path2D, line: VisibleLine, top: number) {
 
 const hazeCache = new WeakMap<
   CanvasRenderingContext2D,
-  { key: string; hasHaze: boolean }
+  { key: string; segmentCounts: number[] }
+>();
+const emphasisCanvases = new WeakMap<
+  CanvasRenderingContext2D,
+  CanvasRenderingContext2D
 >();
 
 export function drawDiagram(
@@ -85,7 +90,9 @@ export function drawDiagram(
     plotLeft + ((time - start) / hour) * pixelsPerHour - left;
   const visible: VisibleLine[] = [];
   const margin = settings.enabled ? settings.width : 4;
-  const tracks = new Map<string, Path2D>();
+  const tracks = [new Map<string, Path2D>(), new Map<string, Path2D>()];
+  const emphasis = settings.emphasisTypeId;
+  const opacity = [emphasis ? 0.5 : 1, 1];
   const hazeKey =
     settings.enabled && (!settings.selectedOnly || selected)
       ? JSON.stringify([
@@ -95,18 +102,23 @@ export function drawDiagram(
           settings.width,
           settings.colors,
           settings.limits,
+          emphasis,
           settings.selectedOnly ? selected : "",
         ])
       : "";
   const cached = hazeKey ? hazeCache.get(haze) : undefined;
   const reuseHaze = cached?.key === hazeKey;
   const bands =
-    hazeKey && !reuseHaze ? settings.colors.map(() => new Path2D()) : [];
-  const gaps = new Path2D();
+    hazeKey && !reuseHaze
+      ? Array.from({ length: emphasis ? 2 : 1 }, () =>
+          settings.colors.map(() => new Path2D()),
+        )
+      : [];
+  const gaps = [new Path2D(), new Path2D()];
   const highlight = new Path2D();
   const highlightGaps = new Path2D();
   const focus = new Path2D();
-  let hazeSegments = 0;
+  const hazeSegments = [0, 0];
   for (const line of candidates) {
     const x1 = x(line.segment.start),
       x2 = x(line.segment.end);
@@ -119,23 +131,27 @@ export function drawDiagram(
       continue;
     const positioned = { ...line, x1, x2 };
     visible.push(positioned);
+    const train = line.segment.service.train;
+    const tier = emphasis && train.typeId === emphasis ? 1 : 0;
+    const active = train.id === selected;
     const gap = line.segment.kind === "gap";
     if (gap) {
-      strokeLine(gaps, positioned, top);
+      if (!active) strokeLine(gaps[tier], positioned, top);
     } else {
-      let track = tracks.get(line.color);
-      if (!track) tracks.set(line.color, (track = new Path2D()));
-      strokeLine(track, positioned, top);
+      if (!active) {
+        let track = tracks[tier].get(line.color);
+        if (!track) tracks[tier].set(line.color, (track = new Path2D()));
+        strokeLine(track, positioned, top);
+      }
     }
-    const active = line.segment.service.train.id === selected;
     if (active) strokeLine(gap ? highlightGaps : highlight, positioned, top);
     if (line.segment === selectedSegment && !gap)
       strokeLine(focus, positioned, top);
     if (bands.length && (!settings.selectedOnly || active)) {
       const band = crowdingBand(line.segment.percent, settings.limits);
       if (band >= 0) {
-        strokeLine(bands[band], positioned, top);
-        hazeSegments++;
+        strokeLine(bands[tier][band], positioned, top);
+        hazeSegments[tier]++;
       }
     }
   }
@@ -175,41 +191,59 @@ export function drawDiagram(
   }
   ctx.stroke();
 
-  const hasHaze = hazeSegments > 0;
-  if (hasHaze) {
-    haze.clearRect(0, 0, width, height);
-    haze.lineCap = "round";
-    // Gaussian-like falloff with batched paths. The composite opacity caps dense overlaps.
-    const layers = hazeSegments > 500 ? [8, 6, 4, 2] : [8, 7, 6, 5, 4, 3, 2, 1];
-    for (const layer of layers) {
-      haze.lineWidth = (settings.width * layer) / 4;
-      haze.globalAlpha = (9 - layer) * (layers.length === 4 ? 0.085 : 0.047);
-      bands.forEach((path, band) => {
-        haze.strokeStyle = settings.colors[band];
-        haze.stroke(path);
-      });
+  const counts = reuseHaze ? cached!.segmentCounts : hazeSegments;
+  counts.forEach((count, tier) => {
+    if (!count) return;
+    let layer = haze;
+    if (tier) {
+      layer =
+        emphasisCanvases.get(haze) ??
+        haze.canvas.ownerDocument.createElement("canvas").getContext("2d")!;
+      emphasisCanvases.set(haze, layer);
+      if (layer.canvas.width !== haze.canvas.width)
+        layer.canvas.width = haze.canvas.width;
+      if (layer.canvas.height !== haze.canvas.height)
+        layer.canvas.height = haze.canvas.height;
+      layer.setTransform(haze.getTransform());
     }
-  }
-  if (hazeKey && !reuseHaze) hazeCache.set(haze, { key: hazeKey, hasHaze });
-  if (hasHaze || (reuseHaze && cached?.hasHaze)) {
-    ctx.globalAlpha = settings.opacity;
-    ctx.drawImage(haze.canvas, 0, 0, width, height);
-    ctx.globalAlpha = 1;
-  }
+    if (!reuseHaze) {
+      layer.clearRect(0, 0, width, height);
+      layer.lineCap = "round";
+      const layers = count > 500 ? [8, 6, 4, 2] : [8, 7, 6, 5, 4, 3, 2, 1];
+      for (const widthStep of layers) {
+        layer.lineWidth = (settings.width * widthStep) / 4;
+        layer.globalAlpha =
+          (9 - widthStep) * (layers.length === 4 ? 0.085 : 0.047);
+        bands[tier].forEach((path, band) => {
+          layer.strokeStyle = settings.colors[band];
+          layer.stroke(path);
+        });
+      }
+    }
+    ctx.globalAlpha = settings.opacity * opacity[tier];
+    ctx.drawImage(layer.canvas, 0, 0, width, height);
+  });
+  if (hazeKey && !reuseHaze)
+    hazeCache.set(haze, { key: hazeKey, segmentCounts: counts });
 
   ctx.lineCap = "round";
   ctx.lineWidth = settings.lineWidth;
-  tracks.forEach((path, color) => {
-    ctx.strokeStyle = color;
-    ctx.stroke(path);
+  tracks.forEach((paths, tier) => {
+    ctx.globalAlpha = opacity[tier];
+    paths.forEach((path, color) => {
+      ctx.strokeStyle = color;
+      ctx.stroke(path);
+    });
+    ctx.setLineDash([3, 4]);
+    ctx.strokeStyle = "#667a80";
+    ctx.stroke(gaps[tier]);
+    ctx.setLineDash([]);
   });
-  ctx.setLineDash([3, 4]);
-  ctx.strokeStyle = "#667a80";
-  ctx.stroke(gaps);
-  ctx.setLineDash([]);
   if (selected) {
     const line = visible.find((v) => v.segment.service.train.id === selected);
     if (line) {
+      const t = line.segment.service.train;
+      ctx.globalAlpha = emphasis && t.typeId !== emphasis ? 0.5 : 1;
       ctx.strokeStyle = line.color;
       ctx.lineWidth = settings.lineWidth + 1.4;
       ctx.stroke(highlight);
@@ -217,10 +251,9 @@ export function drawDiagram(
       ctx.stroke(highlightGaps);
       ctx.setLineDash([]);
       ctx.lineWidth = settings.lineWidth + 2.8;
-      ctx.stroke(focus);
+      if (ctx.globalAlpha === 1) ctx.stroke(focus);
       ctx.font = "bold 12px sans-serif";
       ctx.fillStyle = "#253741";
-      const t = line.segment.service.train;
       const labelX = Math.max(plotLeft + 4, Math.min(width - 55, line.x1 + 4));
       const labelY = Math.max(plotTop + 13, line.y1 - top - 5);
       ctx.strokeStyle = "#fff";

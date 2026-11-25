@@ -16,6 +16,7 @@ export interface Oud2Options {
 }
 const children = (n: OudNode, name: string) =>
   n.children.filter((c) => c.name === name);
+const operationKey = /^Operation(\d+)([BA])(?:\.(\d+)([BA]))?$/;
 const index = (raw: string, max: number, label: string) => {
   if (!/^\d+$/.test(raw) || Number(raw) >= max)
     throw new Error(`${label}: 添え字範囲外 ${raw}`);
@@ -97,14 +98,14 @@ export function parseOud2(
       if (
         n.name === "Ressya" &&
         !known.Ressya.includes(k) &&
-        !/^Operation\d+[BA]$/.test(k)
+        !operationKey.test(k)
       )
         throw new Error(
           `列車の未対応項目 ${k}（${n.line}行の列車）。増解結・未知の運行条件は推測しません`,
         );
       if (
         !(known[n.name] ?? []).includes(k) &&
-        !(n.name === "Ressya" && /^Operation\d+[BA]$/.test(k))
+        !(n.name === "Ressya" && operationKey.test(k))
       ) {
         const label = `${n.name}.${k}`;
         unused.set(label, (unused.get(label) ?? 0) + 1);
@@ -318,24 +319,37 @@ export function parseOud2(
           operations: [],
           sourceEkiJikoku: v.EkiJikoku,
         };
+        const attached = new Set<string>();
         for (const [key, value] of Object.entries(v)) {
-          const match = /^Operation(\d+)([BA])$/.exec(key);
-          if (!match) continue;
+          const match = operationKey.exec(key);
+          if (!match || match[3] !== undefined) continue;
           const position = order[index(match[1], order.length, "駅作業")],
             before = match[2] === "B";
-          for (const raw of value.split(",")) {
+          for (const [operationIndex, raw] of value.split(",").entries()) {
             const code = Number(raw.split("/")[0]);
-            if (!/^[03456]\//.test(raw))
-              fail(`未対応駅作業: ${key}=${raw}（増解結は未対応）`);
+            if (!/^[0-6]\//.test(raw)) fail(`未対応駅作業: ${key}=${raw}`);
             operationCodes.add(code);
             if (code === 0 && !/^0\/\d+\$[^$]*\$0$/.test(raw))
               fail(`入換作業の時刻適用設定は未対応: ${raw}`);
-            train.operations!.push({
+            const operation: StationOperation = {
               positionId: position.id,
               phase: before ? "before" : "after",
               code: code as StationOperation["code"],
               raw,
-            });
+            };
+            if (code === 1 || code === 2) {
+              const format = code === 1 ? /^1\/[01]\$\d*$/ : /^2\/[0-2]\$(?:[1-9]|10)\/\d*$/;
+              if (!format.test(raw)) fail(`増結・解結の構文不正: ${key}=${raw}`);
+              const nestedKey = `${key}.${operationIndex}${code === 1 ? "B" : "A"}`;
+              if (v[nestedKey] !== undefined) {
+                attached.add(nestedKey);
+                operation.children = v[nestedKey].split(",").map((item) => {
+                  if (!/^[03456]\//.test(item)) fail(`未対応の編成駅作業: ${nestedKey}=${item}`);
+                  return { positionId: position.id, phase: code === 1 ? "before" : "after", code: Number(item[0]) as StationOperation["code"], raw: item };
+                });
+              }
+            }
+            train.operations!.push(operation);
             if (code !== 4) continue;
             const parts = raw.split("$");
             const terminalIndex = index(
@@ -382,6 +396,9 @@ export function parseOud2(
             }
           }
         }
+        for (const key of Object.keys(v))
+          if (operationKey.exec(key)?.[3] !== undefined && !attached.has(key))
+            fail(`対応する増結・解結がない編成駅作業: ${key}`);
         return [train];
       });
     }),

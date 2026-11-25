@@ -1,6 +1,7 @@
 import { trainVisits } from "./analysis";
-import type { DiagramAssignment, TrainLoad } from "./assignment-model";
+import { segmentCapacity, type DiagramAssignment, type TrainLoad } from "./assignment-model";
 import type { Project, Stop, Train } from "./model";
+import { formationProfile } from "./train-formation";
 
 export const seatedCrowdingLimit = 40;
 export const crowdingLimits = [100, 130, 160, 200];
@@ -42,6 +43,7 @@ export interface DiagramTrain {
   train: Train;
   visits: Stop[];
   load?: TrainLoad;
+  formation?: ReturnType<typeof formationProfile>;
   segments: DiagramSegment[];
 }
 
@@ -81,7 +83,8 @@ function matchingRun(
     if (
       i > from &&
       i < to &&
-      (load.boardings[i] !== 0 || load.alightings[i] !== 0)
+      (load.boardings[i] !== 0 || load.alightings[i] !== 0 ||
+        segmentCapacity(load, i) !== segmentCapacity(load, from))
     )
       return false;
   }
@@ -113,7 +116,7 @@ export function diagramTrains(
     .map((train): DiagramTrain => {
       const visits = trainVisits(train);
       const load = loads.get(train.id);
-      const service: DiagramTrain = { train, visits, load, segments: [] };
+      const service: DiagramTrain = { train, visits, load, formation: formationProfile(p, diaId, train, visits), segments: [] };
       function add(
         fromIndex: number,
         toIndex: number,

@@ -4,7 +4,7 @@ import {
   defaultAssignmentConfig,
   type DiagramAssignment,
 } from "./assignment-model";
-import { transportCapacity } from "./capacity-model";
+import { completeTransportCapacity } from "./train-formation";
 import { classificationCounts, isPassengerTrain } from "./classification";
 import { diagramPage, mountDiagram } from "./diagram-ui";
 import { download } from "./io";
@@ -216,7 +216,7 @@ function demandPreview() {
     const missing = dia().trains.filter(
       (t) =>
         isPassengerTrain(project, diaId, t) &&
-        transportCapacity(project, diaId, t.id) === null,
+        !completeTransportCapacity(project, diaId, t),
     ).length;
     const names = new Map(project.stations.map((s) => [s.id, s.name]));
     const dominant = [...destinations]

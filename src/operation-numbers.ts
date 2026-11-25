@@ -4,30 +4,35 @@ import { previousOperationTrain } from "./operation-connections";
 /** Extract the numbers explicitly recorded on this train. */
 export function operationNumbers(p: Project, t: Train): string[] {
   if (t.operationNumbers !== undefined) return [...new Set(t.operationNumbers)];
-  const legacy = p.oud2?.fileType === "OuDiaSecond.1.07",
-    values: string[] = [];
-  for (const op of t.operations ?? []) {
-    const fields = op.raw.split("$");
-    let value = "";
-    if ((op.code === 3 || op.code === 4) && op.phase === "before") {
-      const raw = fields[op.code === 3 ? 1 : 2] ?? "";
-      value = legacy
-        ? raw
-        : raw.includes("/")
-          ? raw.slice(raw.indexOf("/") + 1)
-          : "";
-    } else if (op.code === 5 && op.phase === "before") {
-      const raw = fields[1] ?? "";
-      value = legacy && /^[01]\//.test(raw) ? raw.slice(2) : raw;
-    } else if (op.code === 6) value = op.raw.slice(2);
-    values.push(
-      ...value
-        .split(";")
-        .map((v) => v.trim())
-        .filter(Boolean),
-    );
-  }
-  return [...new Set(values)];
+  return [
+    ...new Set(
+      (t.operations ?? []).flatMap((op) => stationOperationNumbers(p, op)),
+    ),
+  ];
+}
+
+export function stationOperationNumbers(
+  p: Project,
+  op: NonNullable<Train["operations"]>[number],
+) {
+  const legacy = p.oud2?.fileType === "OuDiaSecond.1.07";
+  const fields = op.raw.split("$");
+  let value = "";
+  if ((op.code === 3 || op.code === 4) && op.phase === "before") {
+    const raw = fields[op.code === 3 ? 1 : 2] ?? "";
+    value = legacy
+      ? raw
+      : raw.includes("/")
+        ? raw.slice(raw.indexOf("/") + 1)
+        : "";
+  } else if (op.code === 5 && op.phase === "before") {
+    const raw = fields[1] ?? "";
+    value = legacy && /^[01]\//.test(raw) ? raw.slice(2) : raw;
+  } else if (op.code === 6) value = op.raw.slice(2);
+  return value
+    .split(";")
+    .map((v) => v.trim())
+    .filter(Boolean);
 }
 export function operationPattern(number: string) {
   const mask = number

@@ -6,7 +6,7 @@ import type {
   DiagramTransfers,
 } from "./assignment-model";
 import { simulateCapacity, type CapacityPlan } from "./capacity-assignment";
-import { transportCapacity } from "./capacity-model";
+import { completeTransportCapacity } from "./train-formation";
 import { assignDestinationArrivals } from "./destination-assignment";
 import {
   diagramCrowdingCosts,
@@ -336,9 +336,8 @@ export function assignRailwayDiagram(
   )
     throw new Error("混雑率上限での配分は、単一路線・乗換1回までに対応します");
   const unknown = [...index.trips.values()].filter(
-    ({ train, selection }) =>
-      transportCapacity(selection.project, selection.timetableId, train.id) ===
-      null,
+    ({ train, selection, visits }) =>
+      !completeTransportCapacity(selection.project, selection.timetableId, train, visits),
   ).length;
   if (unknown)
     throw new Error(

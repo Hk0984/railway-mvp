@@ -1,6 +1,7 @@
 import { drawHourlyDemand } from "./hourly-demand-preview";
 import { clock, trainVisits } from "./analysis";
-import { capacityForTrain } from "./capacity-model";
+import { capacityForTrain, type FormationValues } from "./capacity-model";
+import { completeTransportCapacity, formationPosition, formationProfile, formationStages, hasFormationChanges, formationUnitGroups } from "./train-formation";
 import {
   classLabels,
   serviceClass,
@@ -104,7 +105,7 @@ export function missingSettings(p: Project, dia: Timetable) {
       return (
         state === "review" ||
         (state === "passenger" &&
-          capacityForTrain(p, dia.id, train).spec?.kind !== "transport")
+          !completeTransportCapacity(p, dia.id, train))
       );
     })
   )
@@ -131,6 +132,10 @@ function operationGroups(p: Project) {
   for (const { name, trains } of p.timetables)
     for (const train of trains) {
       if (train.cancelled) continue;
+      for (const [id, number] of formationUnitGroups(p, train)) {
+        const row = get(id);
+        if (row.examples.size < 3) row.examples.add(number);
+      }
       const { group, numbers, inheritedFrom } = operationGroup(p, train);
       if (!group) {
         ungrouped.push({ timetable: name, train });
@@ -206,6 +211,32 @@ function formationFields(p: Project) {
       <p class="muted">全ダイヤの未分類列車に共通です。列車別の定員を優先します。空欄の場合は、種別やダイヤ共通の定員を使います。</p>
       ${ungroupedOperationTrains(p, ungrouped)}
     </fieldset>`;
+}
+
+function formationSectionFields(p: Project, dia: Timetable) {
+  const names = new Map(p.stations.map(station => [station.id, station.name]));
+  const rows = dia.trains.flatMap((train, ti) => {
+    if (train.cancelled || !hasFormationChanges(train)) return [];
+    const visits = trainVisits(train);
+    const stages = formationStages(train, visits);
+    const profile = formationProfile(p, dia.id, train, visits);
+    const saved = p.capacitySettings?.formationSections?.[trainClassKey(dia.id, train.id)];
+    return stages.map(({index,stop,changes}, si) => {
+      const last = stages[si + 1]?.stop ?? visits.at(-1)!;
+      const name = train.number || train.id;
+      const route = `${names.get(stop.stationId) ?? stop.stationId} → ${names.get(last.stationId) ?? last.stationId}`;
+      const label = name + " " + route;
+      const values = saved?.[formationPosition(stop)];
+      const effective = profile?.[index];
+      const summary = changes.length ? changes.map(work => work.code === 1 ? "増結" : "解結").join("・") + "後" : "始発から";
+      return `<tr><th scope="row">${e(name)}</th><td>${e(route)}<small>${stop.departure === undefined ? "" : clock(stop.departure) + "発 ／ "}${summary}</small></td>
+        <td>${num("formation-cap-" + ti + "-" + si, values?.capacity, label + "の輸送定員", "1", 1)}${values?.capacity === undefined && effective?.capacity !== undefined ? `<small>適用 ${n(effective.capacity, 0)}人</small>` : ""}</td>
+        <td>${num("formation-cars-" + ti + "-" + si, values?.carCount, label + "の編成両数", "1", 1)}${values?.carCount === undefined && effective?.carCount !== undefined ? `<small>適用 ${n(effective.carCount, 0)}両</small>` : ""}</td></tr>`;
+    });
+  });
+  return rows.length ? `<details id="formation-sections"><summary>増結・解結の区間別編成（${n(rows.length, 0)}区間）</summary>
+    <p class="muted">増結・解結を行った駅から先の編成を指定できます。個別の区間設定を優先します。運用番号で編成を特定できるときは、構成する編成の登録値を合算します。</p>
+    <div class="table-scroll train-config"><table><thead><tr><th scope="col">列車</th><th scope="col">適用区間</th><th scope="col">輸送定員（人／編成）</th><th scope="col">編成両数</th></tr></thead><tbody>${rows.join("")}</tbody></table></div></details>` : "";
 }
 
 export function updateFormationSource(form: HTMLFormElement, mode: string) {
@@ -447,6 +478,7 @@ export function settingsBody(p: Project, dia: Timetable, draft?: LineDemand) {
       <p id="minimum-transfer-hint" class="muted">乗換案内・混雑推計の全日区分に共通です。駅構内の移動に時間がかかる場合は値を大きくしてください。</p>
       <p id="boarding-limit-hint" class="muted">乗車上限は全日区分で共通です。空欄なら上限なし。指定の混雑率に達すると、乗り切れない利用者は目的地へ行ける後続便を待ちます。</p>
       ${formationFields(p)}
+      ${formationSectionFields(p, dia)}
       <div class="table-scroll"><table><thead><tr><th scope="col">列車種別</th><th scope="col">営業区分</th><th scope="col">輸送定員（人／編成）</th><th scope="col">編成両数</th></tr></thead>
       <tbody>${p.types
         .map((t, i) => {
@@ -696,6 +728,18 @@ export function applyTrainSettings(
   }
   dia.trains.forEach((t, i) => {
     const key = trainClassKey(dia.id, t.id);
+    if (hasFormationChanges(t) && !t.cancelled) {
+      const sections = Object.fromEntries(formationStages(t).flatMap(({ stop }, si) => {
+        const values: FormationValues = {};
+        const cap = picked("formation-cap-" + i + "-" + si);
+        const count = picked("formation-cars-" + i + "-" + si);
+        if (cap !== "") values.capacity = Number(cap);
+        if (count !== "") values.carCount = Number(count);
+        return cap !== "" || count !== "" ? [[formationPosition(stop), values]] : [];
+      }));
+      if (Object.keys(sections).length) (caps.formationSections ??= {})[key] = sections;
+      else if (caps.formationSections) delete caps.formationSections[key];
+    }
     const cars = Number(picked("cars" + i)) || undefined;
     if (cars && !Number(picked("train-cap" + i)))
       throw new Error(

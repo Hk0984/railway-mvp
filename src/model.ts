@@ -74,8 +74,9 @@ export interface ExternalEndpoint {
 export interface StationOperation {
   positionId: string;
   phase: "before" | "after";
-  code: 0 | 3 | 4 | 5 | 6;
+  code: 0 | 1 | 2 | 3 | 4 | 5 | 6;
   raw: string;
+  children?: StationOperation[];
 }
 export interface Train {
   operationNumbers?: string[];
@@ -358,9 +359,15 @@ export function validateProject(value: unknown): asserts value is Project {
       for (const op of t.operations ?? [])
         if (
           !positions.has(op.positionId) ||
-          ![0, 3, 4, 5, 6].includes(op.code) ||
+          ![0, 1, 2, 3, 4, 5, 6].includes(op.code) ||
           !["before", "after"].includes(op.phase) ||
-          typeof op.raw !== "string"
+          typeof op.raw !== "string" ||
+          (op.children !== undefined && (
+            ![1, 2].includes(op.code) || !Array.isArray(op.children) ||
+            op.children.some(child => !child || child.positionId !== op.positionId ||
+              child.phase !== (op.code === 1 ? "before" : "after") ||
+              ![0, 3, 4, 5, 6].includes(child.code) || typeof child.raw !== "string" || child.children !== undefined)
+          ))
         )
           fail("駅作業参照不正");
       if (

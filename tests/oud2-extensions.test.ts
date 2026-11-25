@@ -139,7 +139,7 @@ describe("実ファイルで確認した書式の回帰", () => {
       fixture().replace("Operation0B=", "Operation0B.0A="),
       fixture().replace("Syubetsu=0", "Syubetsu=0\nMysteryServiceRule=1"),
       fixture().replace("Ressya.\n.", "Ressya.\nHoukou=Kudari\n."),
-      fixture({ operation: "1/0$755" }),
+      fixture({ operation: "1/9$755" }),
     ])
       expect(() => parseOud2(text)).toThrow();
   });

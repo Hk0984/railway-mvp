@@ -88,10 +88,14 @@ export interface TrainLoad {
   peakLoad: number;
   peakSegments: number[];
   capacity: number | null;
+  segmentCapacities?: (number | null)[];
   capacitySource: CapacitySource;
   occupancies: (number | null)[];
   peakOccupancy: number | null;
 }
+export const segmentCapacity = (load: TrainLoad, index: number) =>
+  load.segmentCapacities ? (load.segmentCapacities[index] ?? null) : load.capacity;
+
 export interface AssignmentResult {
   audit?: import("./assignment-diagnostics").AssignmentAudit;
   calculationVersion?: string;

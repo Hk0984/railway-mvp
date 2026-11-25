@@ -8,17 +8,22 @@ export interface CapacitySpec {
   vehicle?: string;
   carCount?: number;
 }
+export interface FormationValues {
+  capacity?: number;
+  carCount?: number;
+}
 export interface CapacitySettings {
   formationSource?: "type" | "operation";
   operationGroups?: Record<string, CapacitySpec>;
   operationGroupCars?: Record<string, number>;
   ungroupedOperationCapacity?: number;
+  formationSections?: Record<string, Record<string, FormationValues>>;
   timetables: Record<string, CapacitySpec>;
   trains: Record<string, CapacitySpec>;
   types: Record<string, CapacitySpec>;
 }
 export type CapacitySource =
-  "train" | "operation" | "ungrouped" | "type" | "unknown";
+  "train" | "operation" | "ungrouped" | "formation" | "type" | "unknown";
 
 export function capacitySpec(
   p: Project,
@@ -153,6 +158,45 @@ export function validateCapacitySettings(p: Project) {
     ),
     new Set(p.types.map((t) => t.id)),
   ];
+  if (c.formationSections !== undefined) {
+    if (
+      !c.formationSections ||
+      typeof c.formationSections !== "object" ||
+      Array.isArray(c.formationSections)
+    )
+      throw new Error("増結・解結の区間別編成設定が不正です");
+    const trains = new Map(
+      p.timetables.flatMap((d) =>
+        d.trains.map((t) => [trainClassKey(d.id, t.id), t] as const),
+      ),
+    );
+    for (const [key, sections] of Object.entries(c.formationSections)) {
+      const train = trains.get(key);
+      if (
+        !train ||
+        !sections ||
+        typeof sections !== "object" ||
+        Array.isArray(sections) ||
+        Object.entries(sections).some(
+          ([id, values]) =>
+            !train.stops.some(
+              (stop) =>
+                stop.status !== "none" &&
+                (stop.positionId ?? stop.stationId) === id,
+            ) ||
+            !values ||
+            typeof values !== "object" ||
+            Array.isArray(values) ||
+            [values.capacity, values.carCount].some(
+              (value) =>
+                value !== undefined &&
+                (!Number.isSafeInteger(value) || value <= 0),
+            ),
+        )
+      )
+        throw new Error("増結・解結の区間別編成設定が不正です");
+    }
+  }
   for (const [i, map] of [
     c.timetables,
     c.trains,

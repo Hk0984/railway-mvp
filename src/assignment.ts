@@ -5,6 +5,7 @@ import { allocateVolume } from "./temporal-demand";
 import { cachedProfile } from "./assignment-cache";
 import { assignCapacity, validateCapacity } from "./capacity-assignment";
 import { capacityForTrain, capacitySpec } from "./capacity-model";
+import { formationProfile } from "./train-formation";
 import {
   arrivalBreaks,
   arrivalWeight,
@@ -14,6 +15,7 @@ import {
 import { demandDestination, validateServiceMapping } from "./integration-model";
 import {
   validateAssignmentConfig,
+  segmentCapacity,
   type AssignmentConfig,
   type AssignmentDemand,
   type AssignmentResult,
@@ -390,7 +392,12 @@ export function aggregateTrainLoads(
     const p = trip.selection.project,
       t = trip.train,
       { spec, source } = capacityForTrain(p, trip.selection.timetableId, t),
-      capacity = spec?.kind === "transport" ? spec.value : null;
+      profile = formationProfile(p, trip.selection.timetableId, t, trip.visits),
+      capacity = profile
+        ? (profile[0]?.capacity ?? null)
+        : spec?.kind === "transport"
+          ? spec.value
+          : null;
     loads.set(key, {
       key,
       datasetId: trip.selection.datasetId,
@@ -410,7 +417,10 @@ export function aggregateTrainLoads(
       peakLoad: 0,
       peakSegments: [],
       capacity,
-      capacitySource: source,
+      ...(profile && {
+        segmentCapacities: profile.map(({ capacity }) => capacity ?? null),
+      }),
+      capacitySource: profile ? "formation" : source,
       occupancies: [],
       peakOccupancy: null,
     });
@@ -448,12 +458,26 @@ export function summarizeTrainLoad(load: TrainLoad) {
   load.peakSegments = load.segmentLoads.flatMap((count, i) =>
     load.peakLoad > 0 && close(count, load.peakLoad) ? [i] : [],
   );
-  load.occupancies = load.segmentLoads.map((count) =>
-    load.capacity === null ? null : count / load.capacity,
-  );
-  load.peakOccupancy =
-    load.capacity === null ? null : load.peakLoad / load.capacity;
+  updateLoadOccupancies(load);
   return load;
+}
+export function updateLoadOccupancies(load: TrainLoad) {
+  load.occupancies = load.segmentLoads.map((count, i) => {
+    const capacity = segmentCapacity(load, i);
+    return load.segmentObserved?.[i] === false || capacity === null
+      ? null
+      : count / capacity;
+  });
+  load.peakOccupancy = load.occupancies.reduce<number | null>(
+    (best, value) => (value === null ? best : Math.max(best ?? 0, value)),
+    null,
+  );
+  if (
+    load.peakOccupancy === null &&
+    !load.segmentCapacities &&
+    load.capacity !== null
+  )
+    load.peakOccupancy = 0;
 }
 export function validateAssignment(
   index: RoutingIndex,
@@ -626,6 +650,7 @@ export function validateAssignment(
       !close(l.totalAlightings, e.totalAlightings) ||
       !close(l.uniquePassengers, e.uniquePassengers) ||
       l.capacity !== e.capacity ||
+      JSON.stringify(l.segmentCapacities) !== JSON.stringify(e.segmentCapacities) ||
       l.capacitySource !== e.capacitySource ||
       JSON.stringify(l.peakSegments) !== JSON.stringify(e.peakSegments) ||
       l.occupancies.length !== e.occupancies.length ||

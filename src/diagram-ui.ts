@@ -2,7 +2,9 @@ import { diagramRoutes } from "./diagram-routes";
 import "./diagram.css";
 import { clock } from "./analysis";
 import type { AssignmentResult, DiagramAssignment } from "./assignment-model";
+import { segmentCapacity } from "./assignment-model";
 import { capacityForTrain, trainCarCount } from "./capacity-model";
+import { isFormationChange } from "./train-formation";
 import { operationGroup } from "./operation-numbers";
 import { trainInterior } from "./diagram-interior";
 import { stationBoardingChart, trainChart } from "./diagram-train-chart";
@@ -33,6 +35,7 @@ import { defaultTrainTypeColor, trainTypeColors } from "./train-type-colors";
 import { escapeHtml as e, numberText as n } from "./ui-utils";
 
 const routeSelection = new WeakMap<Project, number>();
+const typeEmphasis = new WeakMap<Project, string>();
 const storageKey = "railway-lab.diagram-haze";
 const defaultZoom = 640;
 const zoomLevels = [40, 80, 160, 320, defaultZoom];
@@ -133,6 +136,7 @@ export function mountDiagram(
       direction: settings.direction,
       lineWidth: settings.lineWidth,
     });
+  settings.emphasisTypeId = typeEmphasis.get(project);
   const names = new Map(project.stations.map((s) => [s.id, s.name]));
   const types = new Map(project.types.map((t, i) => [t.id, i]));
   const colors = trainTypeColors(project.types);
@@ -191,6 +195,7 @@ export function mountDiagram(
             `<option value="${value}" ${value === settings.direction ? "selected" : ""}>${label}</option>`,
         )
         .join("")}</select></label>
+      <label>強調する種別<select id="diagram-type-emphasis"><option value="">全種別を通常表示</option>${project.types.map((type) => `<option value="${e(type.id)}" ${type.id === settings.emphasisTypeId ? "selected" : ""}>${e(type.name)}</option>`).join("")}</select></label>
       <label>スジ線の太さ<input id="diagram-line-width" type="range" min="${lineWidthRange.min}" max="${lineWidthRange.max}" step="${lineWidthRange.step}" value="${settings.lineWidth}" aria-valuetext="${n(settings.lineWidth)} ピクセル"><output id="diagram-line-width-value" for="diagram-line-width" aria-hidden="true">${n(settings.lineWidth)} px</output></label>
       <label>時間軸<select id="diagram-zoom">${zoomLevels.map((z) => `<option value="${z}" ${z === zoom ? "selected" : ""}>${(z / defaultZoom) * 100}%</option>`).join("")}</select></label>
       ${compact ? "" : `<button data-page="9">${result ? "配分結果・条件を確認" : "旅客配分を計算"}</button>`}
@@ -389,7 +394,11 @@ export function mountDiagram(
       ? train.externalDestination.externalTime
       : (lastStop?.arrival ?? lastLine.end);
     const { spec } = capacityForTrain(project, diaId, train);
-    const cars = trainCarCount(project, diaId, train);
+    const cars = service.formation ? service.formation[0]?.carCount : trainCarCount(project, diaId, train);
+    const formationChanges = train.operations?.filter(isFormationChange).map(op => {
+      const at = project.oud2?.positions.find(position => position.id === op.positionId)?.stationId;
+      return `${at ? station(at) : op.positionId}で${op.code === 1 ? "増結" : "解結"}`;
+    });
     const { numbers, group, inheritedFrom } = operationGroup(project, train);
     const known = segments.filter((s) => s.percent !== null);
     const max = known.reduce<DiagramSegment | undefined>(
@@ -418,7 +427,8 @@ export function mountDiagram(
       <p>${e(origin)} ${originTime === undefined ? "時刻不明" : clock(originTime)} →
       ${e(destination)} ${destinationTime === undefined ? "時刻不明" : clock(destinationTime)}</p>
       ${numbers.length ? `<p>運用番号 ${e(numbers.join("、"))}${group ? ` ／ グループ <code>${e(group)}</code>` : ""}${inheritedFrom ? `（前列車 ${e(inheritedFrom.number || inheritedFrom.id)} から継承）` : ""}</p>` : ""}
-      <p>編成両数 ${cars ? n(cars, 0) + "両" : "未登録"}${spec?.vehicle ? " ／ " + e(spec.vehicle) : ""}</p>
+      <p>${service.formation ? "始発時の" : ""}編成両数 ${cars ? n(cars, 0) + "両" : "未登録"}${spec?.vehicle ? " ／ " + e(spec.vehicle) : ""}</p>
+      ${formationChanges?.length ? `<p>${e(formationChanges.join("・"))}</p>` : ""}
       <p>推計延べ乗車 ${people(load?.totalBoardings)}</p>
       <p>平均混雑率 ${percent(avg)}（算出済み駅間の単純平均）</p>
       <p>最大混雑率 ${percent(max?.percent)}${max ? " ／ " + e(route(max)) : ""}</p>${chart}${boarding}`;
@@ -431,13 +441,15 @@ export function mountDiagram(
         "<h3>区間情報</h3><p>スジの区間をクリックしてください。</p>";
       return;
     }
-    const { train, load } = segment.service;
+    const { train, load, formation } = segment.service;
     const { spec, source } = capacityForTrain(project, diaId, train);
     const group = source === "operation"
       ? operationGroup(project, train, project.capacitySettings?.formationSource === undefined).group
       : null;
+    const stage = formation?.[segment.fromIndex];
     const capacity = load
-      ? load.capacity
+      ? segmentCapacity(load, segment.fromIndex)
+      : formation ? (stage?.capacity ?? null)
       : spec?.kind === "transport"
         ? spec.value
         : null;
@@ -458,10 +470,11 @@ export function mountDiagram(
                   ? "乗車人数は推計済み・輸送定員が未登録"
                   : "旅客配分による推計値";
     detail.innerHTML = `<h3>区間情報</h3><p><strong>${e(train.number || train.id)}</strong> ／ ${e(route(segment))} ／ ${clock(segment.start)}–${clock(segment.end)}</p>
-      <p>推定乗車人数 ${people(segment.passengers)} ／ 輸送力 ${people(capacity)}${capacity !== null && spec?.kind === "transport" ? `（${group ? `運用番号グループ ${e(group)} ／ ` : ""}${e(spec.basis)}）` : ""}</p>
+      <p>推定乗車人数 ${people(segment.passengers)} ／ 輸送力 ${people(capacity)}${capacity !== null ? (formation ? "（区間別編成）" : spec?.kind === "transport" ? `（${group ? `運用番号グループ ${e(group)} ／ ` : ""}${e(spec.basis)}）` : "") : ""}</p>
+      ${formation ? `<p>区間の編成両数 ${stage?.carCount === undefined ? "未登録" : `${n(stage.carCount, 0)}両`}</p>` : ""}
       <p>混雑率 ${percent(segment.percent)} ／ ${status}</p>
       ${segment.untimedPasses ? `<p class="muted">時刻の記載がない通過駅　${segment.untimedPasses.map((s) => e(station(s.stationId))).join("、")}</p>` : ""}
-      ${trainInterior(segment.passengers, capacity, trainCarCount(project, diaId, train))}`;
+      ${trainInterior(segment.passengers, capacity, formation ? stage?.carCount : trainCarCount(project, diaId, train))}`;
   }
 
   function selectTrain(id: string, segment?: DiagramSegment) {
@@ -530,6 +543,10 @@ export function mountDiagram(
       settings.direction = displayDirection(target.value);
       showRoute();
       saveSettings();
+    } else if (target.id === "diagram-type-emphasis") {
+      settings.emphasisTypeId = target.value || undefined;
+      typeEmphasis.set(project, target.value);
+      redraw();
     } else if (target === lineWidth) {
       updateLineWidth();
       saveSettings();

@@ -180,11 +180,13 @@ export function journeyCards(
       <ol class="journey-legs">${j.legs
         .map((leg, i) => {
           const view = legPresentation(project, leg);
+          const formations = view.formationCars?.length ? view.formationCars : [view.carCount];
+          const formationText = formations.map(cars => cars === undefined ? "編成両数未登録" : `${n(cars, 0)}両編成`).join(" → ");
           const color =
             colors.get(leg.typeId)?.timetable ?? defaultTrainTypeColor;
           return `<li>
           ${i > 0 ? `<p class="transfer-note">乗換待ち ${n(j.transfers[i - 1].waitingSeconds / 60)}分</p>` : ""}
-          <p class="journey-train"><strong class="journey-type" style="--type-color:${color}">${e(leg.typeName)}</strong> <span>${e(view.destination)} 行</span>${leg.trainNumber ? ` <small>${e(leg.trainNumber)}</small>` : ""} <small class="journey-car-count">${view.carCount === undefined ? "編成両数未登録" : `${n(view.carCount, 0)}両編成`}</small></p>
+          <p class="journey-train"><strong class="journey-type" style="--type-color:${color}">${e(leg.typeName)}</strong> <span>${e(view.destination)} 行</span>${leg.trainNumber ? ` <small>${e(leg.trainNumber)}</small>` : ""} <small class="journey-car-count">${formationText}</small></p>
           ${timetableStops(leg, view, station, byTrain.get(leg.trainId))}
         </li>`;
         })

@@ -9,7 +9,12 @@ const seatedLimit = seatedCrowdingLimit / 100;
 export function diagramCrowdingCosts(loads: TrainLoad[]) {
   const times = new Map<string, Float64Array>();
   for (const load of loads) {
-    if (load.capacity === null || load.capacity <= 0) continue;
+    if (
+      load.segmentCapacities
+        ? load.segmentCapacities.every((c) => c === null)
+        : load.capacity === null || load.capacity <= 0
+    )
+      continue;
     const prefix = new Float64Array(load.stops.length);
     let from = 0;
     for (let to = 1; to < load.stops.length; to++) {

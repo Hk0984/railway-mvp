@@ -6,6 +6,7 @@ import {
   type LineDemand,
 } from "./line-demand";
 import type { Project, Timetable, Train } from "./model";
+import { formationPosition, formationStages } from "./train-formation";
 
 function sameOrder<T>(a: T[], b: T[], matches: (a: T, b: T) => boolean) {
   return a.length === b.length && a.every((item, i) => matches(item, b[i]));
@@ -203,6 +204,16 @@ export function transferTimetableSettings(
 
   const classes = saved.serviceClasses;
   const capacity = saved.capacitySettings;
+  const formationSections = capacity?.formationSections && Object.fromEntries(
+    Object.entries(capacity.formationSections).flatMap(([key, values]) => {
+      const match = trainMatches.get(key);
+      const target = trainKeys.get(key);
+      const available = new Set(match ? formationStages(match.after).map(stage => formationPosition(stage.stop)) : []);
+      const entries = Object.entries(values).filter(([position]) => available.has(position));
+      skipped += Object.keys(values).length - entries.length;
+      return target && entries.length ? [[target, Object.fromEntries(entries)]] : [];
+    }),
+  );
   const analytics = saved.analytics;
   const project: Project = {
     ...saved,
@@ -244,6 +255,7 @@ export function transferTimetableSettings(
       timetables: rekey(capacity.timetables, timetableIds),
       trains: rekey(capacity.trains, trainKeys),
       types: rekey(capacity.types, typeIds),
+      formationSections,
     },
     lineDemand: saved.lineDemand && transferDemand(saved.lineDemand),
     lineDemandByDay:

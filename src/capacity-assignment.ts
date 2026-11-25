@@ -2,9 +2,16 @@ import {
   assignDemand,
   generalizedCost,
   aggregateTrainLoads,
+  updateLoadOccupancies,
 } from "./assignment";
 import { cachedProfile } from "./assignment-cache";
-import { transportCapacity, capacitySpec } from "./capacity-model";
+import { transportCapacity } from "./capacity-model";
+import {
+  completeTransportCapacity,
+  formationProfile,
+  hasFormationChanges,
+} from "./train-formation";
+import { segmentCapacity } from "./assignment-model";
 import { minimumTransferGainSeconds } from "./diagram-continuation";
 import { allocateVolume } from "./temporal-demand";
 import {
@@ -147,8 +154,11 @@ export function assignCapacity(
     [...index.walks.values()].some((ws) => ws.some((w) => w.ids.length)) ||
     config.arrivalModel?.mode === "minute" ||
     input.some((r) => r.accessSeconds)
-  )
+  ) {
+    if ([...index.trips.values()].some(({ train }) => hasFormationChanges(train)))
+      throw new Error("増結・解結の乗車上限付き配分は混雑ダイヤ図で実行してください");
     return assignIntegratedCapacity(index, input, config, onProgress);
+  }
   const started = performance.now();
   if (
     index.selections.length !== 1 ||
@@ -159,11 +169,7 @@ export function assignCapacity(
     );
   const unknown = [...index.trips].filter(
     ([, t]) =>
-      transportCapacity(
-        t.selection.project,
-        t.selection.timetableId,
-        t.train.id,
-      ) === null,
+      !completeTransportCapacity(t.selection.project, t.selection.timetableId, t.train, t.visits),
   );
   if (unknown.length && (config.unknownCapacityPolicy ?? "error") === "error")
     throw new Error(
@@ -462,12 +468,26 @@ export function simulateCapacity(
         (a, b) =>
           a.ready - b.ready || a.firstArrival - b.firstArrival || a.id - b.id,
       );
-      const cap = load.capacity! * ((limit?.percent ?? 100) / 100);
+      const factor = (limit?.percent ?? 100) / 100;
+      const cap = (segmentCapacity(load, i) ?? 0) * factor;
       let space = cap - riding.reduce((s, p) => s + p.passengers, 0);
       for (const waiting of list) {
         if (waiting.ready > time + 1e-8)
           throw new Error("成立しない乗換が乗車待機列に入りました");
-        const amount = Math.min(waiting.passengers, Math.max(0, space));
+        let available = space;
+        if (load.segmentCapacities) {
+          // Reserve capacity through the rider's alighting stop, including after a split.
+          for (let j = i + 1; j < waiting.plan[0].alightIndex; j++) {
+            const reserved = riding.reduce(
+              (sum, rider) =>
+                sum + (rider.history.at(-1)!.alightIndex > j ? rider.passengers : 0),
+              0,
+            );
+            const remaining = (segmentCapacity(load, j) ?? 0) * factor - reserved;
+            available = Math.min(available, remaining);
+          }
+        }
+        const amount = Math.min(waiting.passengers, Math.max(0, available));
         let p = waiting;
         if (amount > 0) {
           if (amount < waiting.passengers) {
@@ -545,12 +565,6 @@ export function simulateCapacity(
       uniqueByTrain.set(key, (uniqueByTrain.get(key) ?? 0) + p.passengers);
   for (const l of out.loads) {
     const trip = idx.trips.get(l.key)!;
-    const spec = capacitySpec(
-      trip.selection.project,
-      trip.selection.timetableId,
-      trip.train.id,
-    )!;
-    l.capacity = spec.value;
     let onboard = 0;
     l.segmentLoads = [];
     l.segmentObserved = [];
@@ -575,10 +589,7 @@ export function simulateCapacity(
     l.peakSegments = l.segmentLoads.flatMap((v, i) =>
       v > 0 && near(v, l.peakLoad) ? [i] : [],
     );
-    l.occupancies = l.segmentLoads.map((v, i) =>
-      l.segmentObserved![i] ? v / l.capacity! : null,
-    );
-    l.peakOccupancy = l.peakLoad / l.capacity;
+    updateLoadOccupancies(l);
   }
   out.milliseconds = performance.now() - started;
   const errors = validateSingleCapacity(idx, base, out);
@@ -651,16 +662,16 @@ function validateSingleCapacity(
       errors.push("コホート保存則");
   for (const l of o.loads) {
     const source = index.trips.get(l.key);
-    if (
-      !source ||
-      l.capacity !==
-        transportCapacity(
-          source.selection.project,
-          source.selection.timetableId,
-          source.train.id,
-        )
-    )
-      errors.push("輸送定員参照不一致");
+    const profile = source && formationProfile(
+      source.selection.project, source.selection.timetableId, source.train, source.visits,
+    );
+    const capacityMatches = source && (profile
+      ? profile.length === l.segmentCapacities?.length &&
+        profile.every(({ capacity }, i) => capacity === l.segmentCapacities?.[i])
+      : l.capacity === transportCapacity(
+          source.selection.project, source.selection.timetableId, source.train.id,
+        ));
+    if (!capacityMatches) errors.push("輸送定員参照不一致");
     const actual = eventsByTrain.get(l.key);
     if (
       !near(actual?.board ?? 0, l.totalBoardings) ||
@@ -673,7 +684,8 @@ function validateSingleCapacity(
       n += l.boardings[i] - l.alightings[i];
       if (
         n < -1e-7 ||
-        n > l.capacity! * ((o.boardingLimitPercent ?? 100) / 100) + 1e-7 ||
+        (i < l.segmentLoads.length &&
+          n > (segmentCapacity(l, i) ?? 0) * ((o.boardingLimitPercent ?? 100) / 100) + 1e-7) ||
         (i < l.segmentLoads.length &&
           l.segmentObserved?.[i] !== false &&
           !near(n, l.segmentLoads[i]))
