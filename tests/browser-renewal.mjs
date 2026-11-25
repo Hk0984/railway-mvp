@@ -662,6 +662,57 @@ try {
     /23:55–24:15/,
   );
 
+  // Different timetable start times must keep the clock time at the left edge.
+  const stations = Array.from(
+    { length: 30 },
+    (_, i) => `Eki.\nEkimei=駅${i + 1}\n.\n`,
+  ).join("");
+  const timetables = [
+    [6, 11, 19],
+    [7, 11, 18],
+    [12, 14, 16],
+  ]
+    .map((hours, i) => {
+      const trains = hours.map((hour) => {
+        const times = Array.from(
+          { length: 30 },
+          (_, index) => `1;${hour * 100 + index}`,
+        ).join(",");
+        return `Ressya.\nHoukou=Kudari\nSyubetsu=0\nEkiJikoku=${times}\n.\n`;
+      });
+      return `Dia.\nDiaName=ダイヤ${i + 1}\nKudari.\n${trains.join("")}.\n.\n`;
+    })
+    .join("");
+  await page.getByRole("link", { name: "データ設定" }).click();
+  await openOud(
+    "viewport.oud2",
+    `FileType=OuDiaSecond.1.17\nRosen.\nRosenmei=表示位置の検証\n${stations}Ressyasyubetsu.\nSyubetsumei=普通\n.\n${timetables}.\n`,
+  );
+  await page.getByText(/viewport\.oud2を読み込みました/).waitFor();
+  await page.getByRole("link", { name: "混雑ダイヤ図" }).click();
+  await zoom.selectOption("320");
+  await diagramTrain.selectOption("oud-0-Kudari-1");
+  await section.selectOption("0");
+  const typeEmphasis = page.getByLabel("強調する種別");
+  await typeEmphasis.selectOption({ label: "普通" });
+  await plot.evaluate((el) => el.scrollTo(1200, 180));
+  const plotPosition = () => plot.evaluate((el) => [el.scrollLeft, el.scrollTop]);
+  assert.deepEqual(await plotPosition(), [1200, 180]);
+
+  const timetable = page.locator("#active-dia");
+  await timetable.selectOption("oud-dia1");
+  assert.equal(await zoom.inputValue(), "320");
+  assert.deepEqual(await plotPosition(), [880, 180]);
+  assert.equal(await diagramTrain.inputValue(), "");
+  assert.equal(await section.isDisabled(), true);
+  assert.equal(await typeEmphasis.inputValue(), "0");
+  await timetable.selectOption("oud-dia0");
+  assert.deepEqual(await plotPosition(), [1200, 180]);
+  await day.selectOption("friday");
+  assert.deepEqual(await plotPosition(), [1200, 180]);
+  await timetable.selectOption("oud-dia2");
+  assert.deepEqual(await plotPosition(), [0, 180]);
+
   assert.equal(
     await page.evaluate(() => localStorage.getItem("railway-lab-v1")),
     legacyStored,

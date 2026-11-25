@@ -627,8 +627,9 @@ app.addEventListener("change", (event) => {
     notice = "";
     resetResult();
     persist();
-    render();
-    document.getElementById(input.id)?.focus();
+    const onDiagram = page === "diagram";
+    render(onDiagram);
+    document.getElementById(input.id)?.focus({ preventScroll: onDiagram });
     return;
   }
   const form = input.closest<HTMLFormElement>("#settings-form");

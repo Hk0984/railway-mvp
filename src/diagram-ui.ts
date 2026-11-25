@@ -42,9 +42,12 @@ const zoomLevels = [40, 80, 160, 320, defaultZoom];
 type DisplayDirection = Direction | "all";
 type DiagramSettings = DiagramRenderSettings & { direction: DisplayDirection };
 interface DiagramViewport {
-  left: number;
+  time: number;
   top: number;
   zoom: number;
+  route: string[];
+  emphasisTypeId: string | undefined;
+  timetableId: string;
   trainId: string;
   segmentIndex: number | undefined;
 }
@@ -136,7 +139,9 @@ export function mountDiagram(
       direction: settings.direction,
       lineWidth: settings.lineWidth,
     });
-  settings.emphasisTypeId = typeEmphasis.get(project);
+  settings.emphasisTypeId = viewport
+    ? viewport.emphasisTypeId
+    : typeEmphasis.get(project);
   const names = new Map(project.stations.map((s) => [s.id, s.name]));
   const types = new Map(project.types.map((t, i) => [t.id, i]));
   const colors = trainTypeColors(project.types);
@@ -148,10 +153,19 @@ export function mountDiagram(
   );
   const byId = new Map(trains.map((t) => [t.train.id, t]));
   const routes = diagramRoutes(project, trains);
-  let routeIndex = Math.min(
-    routeSelection.get(project) ?? 0,
-    routes.length - 1,
+  const previousRoute = viewport?.route;
+  const topStation = viewport?.route[Math.floor(viewport.top / rowHeight)];
+  let routeIndex = routes.findIndex(
+    (route) =>
+      route.length === previousRoute?.length &&
+      route.every((station, i) => station === previousRoute[i]),
   );
+  if (routeIndex < 0 && topStation !== undefined)
+    routeIndex = routes.findIndex((route) => route.includes(topStation));
+  if (routeIndex < 0)
+    routeIndex = Math.min(routeSelection.get(project) ?? 0, routes.length - 1);
+  routeSelection.set(project, routeIndex);
+  if (settings.emphasisTypeId) typeEmphasis.set(project, settings.emphasisTypeId);
   let zoom = viewport?.zoom ?? defaultZoom;
   let stationNames: string[] = [];
   let visibleSegments = new Set<DiagramSegment>();
@@ -241,7 +255,7 @@ export function mountDiagram(
   const segmentSelect = find<HTMLSelectElement>("#diagram-section");
   const lineWidth = find<HTMLInputElement>("#diagram-line-width");
   const lineWidthValue = find<HTMLOutputElement>("#diagram-line-width-value");
-  let selected = viewport?.trainId ?? "",
+  let selected = viewport?.timetableId === diaId ? viewport.trainId : "",
     active =
       viewport?.segmentIndex === undefined
         ? undefined
@@ -624,16 +638,22 @@ export function mountDiagram(
   });
   showRoute();
   if (viewport) {
-    scroll.scrollLeft = viewport.left;
-    scroll.scrollTop = viewport.top;
+    scroll.scrollLeft = ((viewport.time - start) * zoom) / 3600;
+    const row =
+      topStation === undefined ? -1 : routes[routeIndex].indexOf(topStation);
+    scroll.scrollTop =
+      row < 0 ? viewport.top : row * rowHeight + (viewport.top % rowHeight);
   }
   return () => {
     observer.disconnect();
     cancelAnimationFrame(frame);
     return {
-      left: scroll.scrollLeft,
+      time: start + (scroll.scrollLeft * 3600) / zoom,
       top: scroll.scrollTop,
       zoom,
+      route: routes[routeIndex],
+      emphasisTypeId: settings.emphasisTypeId,
+      timetableId: diaId,
       trainId: selected,
       segmentIndex: active?.service.segments.indexOf(active),
     };
