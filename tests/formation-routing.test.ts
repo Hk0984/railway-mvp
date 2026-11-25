@@ -1,11 +1,15 @@
 import { expect, it } from "vitest";
+import { trainClassKey } from "../src/classification";
 import { parseOud2 } from "../src/oud2";
+import { legPresentation } from "../src/route-presentation";
 import {
   buildRoutingIndex,
   searchJourneys,
   validateJourney,
 } from "../src/routing";
 import type { RouteQuery } from "../src/routing-model";
+import { formationCarCount, formationProfile } from "../src/train-formation";
+import { trainVisits } from "../src/analysis";
 
 const feeder = `Ressya.
 Syubetsu=0
@@ -157,4 +161,70 @@ it("does not continue into a non-passenger portion", () => {
     { project, datasetId: "rail", timetableId: "oud-dia0" },
   ]);
   expect(searchJourneys(index, query).journeys).toEqual([]);
+});
+
+function formationFixture() {
+  const data = fixture();
+  const { project } = data;
+  const [dia] = project.timetables;
+  const [, combined, portion] = dia.trains;
+  combined.operations!.splice(1, 0, {
+    code: 6,
+    phase: "before",
+    positionId: "oud-p1",
+    raw: "6/01H;02R",
+  });
+  project.capacitySettings = {
+    formationSource: "operation",
+    operationGroupCars: { "**H": 8 },
+    operationGroups: {
+      "**R": { value: 400, kind: "transport", basis: "検証", carCount: 4 },
+    },
+    types: {},
+    timetables: {},
+    trains: {},
+  };
+  return { ...data, dia, combined, portion };
+}
+
+it.each([
+  ["0", 4, 8],
+  ["1", 8, 4],
+  ["2", undefined, undefined],
+])(
+  "uses only the affected units after an uncoupling with code %s",
+  (side, detachedCars, remainingCars) => {
+    const { project, dia, combined, index, query } = formationFixture();
+    combined.operations!.find((op) => op.code === 2)!.raw = `2/${side}$1/71030`;
+    const journey = searchJourneys(index, query).journeys[0];
+    expect(legPresentation(project, journey.legs[2]).carCount).toBe(
+      detachedCars,
+    );
+    expect(
+      formationProfile(project, dia.id, combined, trainVisits(combined))?.map(
+        (stage) => stage.carCount,
+      ),
+    ).toEqual([12, remainingCars, remainingCars]);
+  },
+);
+
+it("keeps the detached count for direct boarding and prioritizes a manual override", () => {
+  const { project, dia, portion } = formationFixture();
+  expect(formationCarCount(project, dia.id, portion)).toBe(4);
+  project.capacitySettings!.trains[trainClassKey(dia.id, portion.id)] = {
+    value: 480,
+    kind: "transport",
+    basis: "検証",
+    carCount: 5,
+  };
+  expect(formationCarCount(project, dia.id, portion)).toBe(5);
+});
+
+it("sums multiple detached units only when all of their counts are registered", () => {
+  const { project, dia, combined, portion } = formationFixture();
+  combined.operations!.find((op) => op.code === 6)!.raw = "6/01H;02R;03K";
+  combined.operations!.find((op) => op.code === 2)!.raw = "2/0$2/71030";
+  expect(formationCarCount(project, dia.id, portion)).toBeUndefined();
+  project.capacitySettings!.operationGroupCars!["**K"] = 3;
+  expect(formationCarCount(project, dia.id, portion)).toBe(7);
 });

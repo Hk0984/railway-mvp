@@ -190,7 +190,7 @@ export function journeyCards(
             leg.continuation === "couple"
               ? `${operationStation}で増結 · そのまま乗車`
               : leg.continuation === "split"
-                ? `${operationStation}で解結 · ${view.destination}方面の編成に乗ったまま`
+                ? `${operationStation}で解結 · ${view.destination}行の車両に乗ったまま`
                 : i > 0
                   ? `乗換待ち ${n(j.transfers[transferIndex++].waitingSeconds / 60)}分`
                   : "";
@@ -207,7 +207,7 @@ export function journeyCards(
           return `<li>
           ${connection ? `<p class="transfer-note">${e(connection)}</p>` : ""}
           <p class="journey-train"><strong class="journey-type" style="--type-color:${color}">${e(leg.typeName)}</strong> <span>${e(view.destination)} 行</span>${leg.trainNumber ? ` <small>${e(leg.trainNumber)}</small>` : ""} <small class="journey-car-count">${formationText}</small></p>
-          ${portion ? `<p class="transfer-note">乗車時は${e(portion)}方面の編成を選択</p>` : ""}
+          ${portion ? `<p class="transfer-note">${e(portion)}行の車両に乗車</p>` : ""}
           ${timetableStops(leg, view, station, byTrain.get(leg.trainId))}
         </li>`;
         })

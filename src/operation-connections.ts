@@ -211,6 +211,7 @@ export interface FormationConnection {
   to: Train;
   toIndex: number;
   kind: "couple" | "split";
+  operation: StationOperation;
 }
 
 type FormationPoint = {
@@ -228,14 +229,28 @@ function connectionTime(op: StationOperation, dayStart: number) {
   return timeField === undefined ? NaN : operationTime(timeField, dayStart);
 }
 
+const formationConnections = new WeakMap<
+  Project,
+  Map<Timetable, FormationConnection[]>
+>();
+
 export function passengerFormationConnections(
   project: Project,
   timetable: Timetable,
 ) {
   if (project.oud2?.fileType !== "OuDiaSecond.1.17") return [];
+  const cached =
+    formationConnections.get(project) ??
+    new Map<Timetable, FormationConnection[]>();
+  formationConnections.set(project, cached);
+  const known = cached.get(timetable);
+  if (known) return known;
   const dayStart = project.oud2.serviceDayStart;
   type Endpoint = FormationPoint & { side: "before" | "after" };
-  type Work = FormationPoint & { kind: FormationConnection["kind"] };
+  type Work = FormationPoint & {
+    kind: FormationConnection["kind"];
+    operation: StationOperation;
+  };
   type Station = {
     stays: (TrackStay & { train: Train })[];
     endpoints: Endpoint[];
@@ -322,7 +337,13 @@ export function passengerFormationConnections(
             : first || stop.arrival === undefined)
         )
           continue;
-        station.works.push({ ...point, kind, time, referenceTime });
+        station.works.push({
+          ...point,
+          kind,
+          time,
+          referenceTime,
+          operation: op,
+        });
       }
     }
   }
@@ -373,8 +394,10 @@ export function passengerFormationConnections(
         to: to.train,
         toIndex: to.index,
         kind: work.kind,
+        operation: work.operation,
       });
     }
   }
+  cached.set(timetable, links);
   return links;
 }

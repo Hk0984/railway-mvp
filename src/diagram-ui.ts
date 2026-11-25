@@ -3,8 +3,8 @@ import "./diagram.css";
 import { clock } from "./analysis";
 import type { AssignmentResult, DiagramAssignment } from "./assignment-model";
 import { segmentCapacity } from "./assignment-model";
-import { capacityForTrain, trainCarCount } from "./capacity-model";
-import { isFormationChange } from "./train-formation";
+import { capacityForTrain } from "./capacity-model";
+import { formationCarCount, isFormationChange } from "./train-formation";
 import { operationGroup } from "./operation-numbers";
 import { trainInterior } from "./diagram-interior";
 import { stationBoardingChart, trainChart } from "./diagram-train-chart";
@@ -408,7 +408,9 @@ export function mountDiagram(
       ? train.externalDestination.externalTime
       : (lastStop?.arrival ?? lastLine.end);
     const { spec } = capacityForTrain(project, diaId, train);
-    const cars = service.formation ? service.formation[0]?.carCount : trainCarCount(project, diaId, train);
+    const cars = service.formation
+      ? service.formation[0]?.carCount
+      : formationCarCount(project, diaId, train, service.visits);
     const formationChanges = train.operations?.filter(isFormationChange).map(op => {
       const at = project.oud2?.positions.find(position => position.id === op.positionId)?.stationId;
       return `${at ? station(at) : op.positionId}で${op.code === 1 ? "増結" : "解結"}`;
@@ -488,7 +490,7 @@ export function mountDiagram(
       ${formation ? `<p>区間の編成両数 ${stage?.carCount === undefined ? "未登録" : `${n(stage.carCount, 0)}両`}</p>` : ""}
       <p>混雑率 ${percent(segment.percent)} ／ ${status}</p>
       ${segment.untimedPasses ? `<p class="muted">時刻の記載がない通過駅　${segment.untimedPasses.map((s) => e(station(s.stationId))).join("、")}</p>` : ""}
-      ${trainInterior(segment.passengers, capacity, formation ? stage?.carCount : trainCarCount(project, diaId, train))}`;
+      ${trainInterior(segment.passengers, capacity, formation ? stage?.carCount : formationCarCount(project, diaId, train, segment.service.visits))}`;
   }
 
   function selectTrain(id: string, segment?: DiagramSegment) {
