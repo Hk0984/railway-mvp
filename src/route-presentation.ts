@@ -1,6 +1,7 @@
 import type { Project, Stop } from "./model";
 import type { JourneyLeg } from "./routing-model";
 import { trainVisits } from "./analysis";
+import { formationCarCount, formationProfile } from "./train-formation";
 export function legPresentation(project: Project, leg: JourneyLeg) {
   const train = project.timetables
       .find((d) => d.id === leg.timetableId)
@@ -41,6 +42,15 @@ export function legPresentation(project: Project, leg: JourneyLeg) {
       project.stations.find((s) => s.id === terminal?.stationId)?.name ??
       "行先未記載",
     stops: leg.stops.slice(1, -1).filter((s) => s.status === "stop"),
+    carCount: train
+      ? formationCarCount(project, leg.timetableId, train, visits)
+      : undefined,
+    formationCars: train
+      ? formationProfile(project, leg.timetableId, train, visits)
+          ?.slice(leg.boardIndex, leg.alightIndex)
+          .map((values) => values.carCount)
+          .filter((count, i, all) => i === 0 || count !== all[i - 1])
+      : undefined,
     departureTrack: track("departure"),
     arrivalTrack: track("arrival"),
   };

@@ -1,4 +1,10 @@
 import {
+  validateLineDemand,
+  type DemandSelection,
+  type LineDemand,
+  type LineDemandByDay,
+} from "./line-demand";
+import {
   validateTemporalState,
   validateTemporalConfig,
   type TemporalState,
@@ -68,8 +74,9 @@ export interface ExternalEndpoint {
 export interface StationOperation {
   positionId: string;
   phase: "before" | "after";
-  code: 0 | 3 | 4 | 5 | 6;
+  code: 0 | 1 | 2 | 3 | 4 | 5 | 6;
   raw: string;
+  children?: StationOperation[];
 }
 export interface Train {
   operationNumbers?: string[];
@@ -107,9 +114,22 @@ export interface Parameters {
   studentWeight: number;
   attractionWeight: number;
 }
+export interface TrainType {
+  id: string;
+  name: string;
+  carCount?: number;
+  diagramColor: string | null;
+  timetableColor: string | null;
+}
+
+export const projectSchemaVersion = 2;
+
 export interface Project {
-  schemaVersion: 1;
+  schemaVersion: typeof projectSchemaVersion;
   datasetId?: string;
+  lineDemand?: LineDemand;
+  lineDemandByDay?: LineDemandByDay;
+  demandSelection?: DemandSelection;
   serviceClasses?: ServiceClassification;
   typeCapacities?: Record<string, number>;
   assignmentConfig?: AssignmentConfig;
@@ -119,12 +139,11 @@ export interface Project {
   temporalConfig?: TemporalConfig;
   name: string;
   stations: Station[];
-  types: { id: string; name: string }[];
+  types: TrainType[];
   timetables: Timetable[];
   costs: Record<string, Record<string, number>>;
   parameters: Parameters;
   demands: Demand[];
-  /** Optional metadata leaves initial schemaVersion 1 files valid. */
   oud2?: {
     fileType: string;
     encoding?: string;
@@ -150,9 +169,13 @@ export function validateProject(value: unknown): asserts value is Project {
   const fail = (s: string): never => {
     throw new Error(`データ検証: ${s}`);
   };
+  if ((value as { schemaVersion?: number } | null)?.schemaVersion === 1)
+    fail(
+      "旧形式のJSONです。元のOuDia2ndファイル（.oud2）を開き、設定を新形式で保存してください。",
+    );
+  if (p?.schemaVersion !== projectSchemaVersion)
+    fail("種別色に対応した新形式のプロジェクトJSONが必要です");
   if (
-    !p ||
-    p.schemaVersion !== 1 ||
     typeof p.name !== "string" ||
     !Array.isArray(p.stations) ||
     p.stations.length < 2 ||
@@ -163,7 +186,7 @@ export function validateProject(value: unknown): asserts value is Project {
     !p.costs ||
     !p.parameters
   )
-    fail("schemaVersion=1 のプロジェクトが必要です");
+    fail("プロジェクトJSONに必要な項目がありません");
   const ids = new Set<string>();
   const nonnegative = (n: unknown) =>
     typeof n === "number" && Number.isFinite(n) && n >= 0;
@@ -205,12 +228,30 @@ export function validateProject(value: unknown): asserts value is Project {
   const typeIds = new Set(p.types.map((t) => t.id));
   validateClassifications(p);
   validateCapacitySettings(p);
+  validateLineDemand(p);
   validateAnalytics(p);
   if (
     typeIds.size !== p.types.length ||
     p.types.some((t) => !t.id || typeof t.name !== "string")
   )
     fail("種別ID不正");
+  if (
+    p.types.some(
+      ({ carCount }) =>
+        carCount !== undefined &&
+        (!Number.isSafeInteger(carCount) || carCount <= 0),
+    )
+  )
+    fail("種別の編成両数は1以上の整数を入力してください");
+  for (const { diagramColor, timetableColor } of p.types)
+    for (const color of [diagramColor, timetableColor])
+      if (
+        color !== null &&
+        (typeof color !== "string" || !/^#[0-9a-f]{6}$/i.test(color))
+      )
+        fail(
+          "種別色にはダイヤ線色と時刻表文字色が必要です（#RRGGBB、未設定はnull）",
+        );
   const diaIds = new Set<string>();
   const positions = new Map(p.oud2?.positions.map((x) => [x.id, x]) ?? []);
   if (p.oud2) {
@@ -318,9 +359,15 @@ export function validateProject(value: unknown): asserts value is Project {
       for (const op of t.operations ?? [])
         if (
           !positions.has(op.positionId) ||
-          ![0, 3, 4, 5, 6].includes(op.code) ||
+          ![0, 1, 2, 3, 4, 5, 6].includes(op.code) ||
           !["before", "after"].includes(op.phase) ||
-          typeof op.raw !== "string"
+          typeof op.raw !== "string" ||
+          (op.children !== undefined && (
+            ![1, 2].includes(op.code) || !Array.isArray(op.children) ||
+            op.children.some(child => !child || child.positionId !== op.positionId ||
+              child.phase !== (op.code === 1 ? "before" : "after") ||
+              ![0, 3, 4, 5, 6].includes(child.code) || typeof child.raw !== "string" || child.children !== undefined)
+          ))
         )
           fail("駅作業参照不正");
       if (

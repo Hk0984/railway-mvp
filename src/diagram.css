@@ -1,0 +1,210 @@
+.diagram-controls,
+.diagram-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem 1rem;
+  align-items: center;
+  margin: 0.65rem 0;
+}
+.diagram-controls label,
+.diagram-legend label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin: 0;
+}
+#diagram-line-width {
+  width: clamp(5.25rem, 12vw, 8rem);
+  margin: 0;
+  accent-color: #006751;
+}
+#diagram-line-width-value {
+  min-width: 6ch;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.diagram-legend input[type="number"] {
+  width: 5rem;
+}
+.diagram-legend input[type="color"] {
+  width: 2rem;
+  padding: 2px;
+}
+.diagram-scroll {
+  height: min(62vh, 650px);
+  min-height: 260px;
+  overflow: auto;
+  position: relative;
+  border: 1px solid #d7e2dd;
+  border-radius: 8px;
+  background: #fff;
+}
+.diagram-scroll canvas {
+  display: block;
+  position: sticky;
+  top: 0;
+  left: 0;
+  cursor: crosshair;
+}
+.diagram-scroll .diagram-size {
+  position: absolute;
+  inset: 0 auto auto 0;
+  pointer-events: none;
+}
+.diagram-details {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 250px), 1fr));
+  gap: 1rem;
+  margin-top: 1rem;
+}
+.diagram-details section {
+  min-width: 0;
+  padding: 0.75rem;
+  background: #f5f8f7;
+  border-radius: 6px;
+}
+.diagram-details h3,
+.diagram-details p {
+  margin: 0.25rem 0;
+}
+.diagram-interior {
+  margin: 0.85rem 0 0;
+  padding-top: 0.65rem;
+  border-top: 1px solid #d7e2dd;
+}
+.diagram-interior figcaption,
+.diagram-interior-key {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.8rem;
+}
+.diagram-interior svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-width: 440px;
+  margin-top: 0.2rem;
+}
+.diagram-interior-shell {
+  fill: #fff;
+  stroke: #8da4a5;
+  stroke-width: 2;
+}
+.diagram-interior-door {
+  fill: #d7e6eb;
+  stroke: #8da4a5;
+}
+.diagram-interior-seat {
+  fill: #d2e5dd;
+  stroke: #a6c2b7;
+}
+.diagram-interior-seated {
+  --interior-person: #0e7060;
+}
+.diagram-interior-standing {
+  --interior-person: #365a74;
+}
+.diagram-interior svg circle {
+  fill: var(--interior-person);
+}
+.diagram-interior-key {
+  font-size: 0.82rem;
+}
+.diagram-interior-key span {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+.diagram-interior-key span::before {
+  content: "";
+  width: 0.65rem;
+  height: 0.65rem;
+  border-radius: 50%;
+  background: var(--interior-person);
+}
+.diagram-train-chart,
+.diagram-boarding-chart {
+  margin-top: 0.65rem;
+  overflow-x: auto;
+}
+.diagram-train-chart svg,
+.diagram-boarding-chart svg {
+  display: block;
+  max-width: none;
+  fill: currentColor;
+  font-size: 12px;
+}
+.diagram-chart-heading {
+  font-weight: 650;
+}
+.diagram-chart-axis {
+  fill: none;
+  stroke: #a8bcb4;
+}
+.diagram-chart-line {
+  fill: none;
+  stroke: #315c60;
+}
+.diagram-chart-point {
+  fill: #315c60;
+}
+.diagram-chart-peak {
+  fill: #a63552;
+}
+.diagram-chart-station.vertical {
+  writing-mode: vertical-rl;
+}
+.diagram-transfer-from {
+  fill: #2b6eae;
+  background-color: #2b6eae;
+}
+.diagram-transfer-to {
+  fill: #a64f16;
+  background-color: #a64f16;
+}
+.diagram-boarding {
+  margin-top: 0.85rem;
+  padding-top: 0.65rem;
+  border-top: 1px solid #d7e2dd;
+}
+.diagram-boarding h4 {
+  margin: 0;
+}
+.diagram-boarding-board {
+  fill: #78b9a7;
+  background-color: #78b9a7;
+}
+.diagram-boarding-alight {
+  fill: #e6b377;
+  background-color: #e6b377;
+}
+.diagram-boarding-table {
+  overflow-x: auto;
+}
+.diagram-transfer-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem 0.85rem;
+  font-size: 0.85rem;
+}
+.diagram-transfer-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+.diagram-transfer-legend i {
+  width: 0.65rem;
+  height: 0.65rem;
+}
+.diagram-transfer-values {
+  margin-top: 0.55rem;
+  font-size: 0.85rem;
+}
+.diagram-transfer-values table {
+  margin-top: 0.35rem;
+}
+.diagram-transfer-values td {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}

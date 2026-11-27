@@ -1,7 +1,16 @@
 import { it, expect } from "vitest";
 import { sampleProject } from "../src/sample";
-import { operationNumbers, operationGroup } from "../src/operation-numbers";
-import { capacitySpec, transportCapacity } from "../src/capacity-model";
+import {
+  operationNumbers,
+  operationGroup,
+  operationPattern,
+} from "../src/operation-numbers";
+import {
+  capacityForTrain,
+  capacitySpec,
+  trainCarCount,
+  transportCapacity,
+} from "../src/capacity-model";
 import { validateProject } from "../src/model";
 import { buildRoutingIndex, searchJourneys } from "../src/routing";
 import { legPresentation, platformName } from "../src/route-presentation";
@@ -20,25 +29,22 @@ it.skipIf(!existsSync(new URL("./fixtures/real/琴町線.oud2", import.meta.url)
       ).project,
       before = JSON.stringify(p.timetables),
       trains = p.timetables.flatMap((d) => d.trains),
-      groups = new Set(
-        trains.flatMap((t) =>
-          operationGroup(p, t).group ? [operationGroup(p, t).group!] : [],
-        ),
-      );
-    expect(groups.has("C")).toBe(true);
-    expect(groups.has("D")).toBe(true);
+      groups = new Set(trains.flatMap((t) => operationGroup(p, t).group ?? []));
+    expect(groups.has("**C")).toBe(true);
+    expect(groups.has("**D")).toBe(true);
     p.capacitySettings = {
       trains: {},
       types: {},
       timetables: {},
+      formationSource: "operation",
       operationGroups: {
-        C: { value: 240, kind: "transport", basis: "試験用の仮定" },
+        "**C": { value: 240, kind: "transport", basis: "試験用の仮定" },
       },
     };
     const d = p.timetables.find((d) =>
-        d.trains.some((t) => operationGroup(p, t).group === "C"),
+        d.trains.some((t) => operationGroup(p, t).group === "**C"),
       )!,
-      t = d.trains.find((t) => operationGroup(p, t).group === "C")!;
+      t = d.trains.find((t) => operationGroup(p, t).group === "**C")!;
     expect(transportCapacity(p, d.id, t.id)).toBe(240);
     expect(JSON.stringify(p.timetables)).toBe(before);
     validateProject(JSON.parse(JSON.stringify(p)));
@@ -129,7 +135,7 @@ it("extracts the operation number rather than the linkage code for 1.17", () => 
   const p = fixture(),
     t = p.timetables[0].trains[0];
   expect(operationNumbers(p, t)).toEqual(["01C"]);
-  expect(operationGroup(p, t).group).toBe("C");
+  expect(operationGroup(p, t).group).toBe("**C");
   expect(transportCapacity(p, "weekday", "t")).toBe(120);
 });
 it("accepts legacy operation syntax and manual explicit operation numbers", () => {
@@ -137,9 +143,63 @@ it("accepts legacy operation syntax and manual explicit operation numbers", () =
     t = p.timetables[0].trains[0];
   p.oud2!.fileType = "OuDiaSecond.1.07";
   t.operations![0].raw = "3/0700$15D";
-  expect(operationGroup(p, t).group).toBe("D");
+  expect(operationGroup(p, t).group).toBe("**D");
   t.operationNumbers = ["a12"];
-  expect(operationGroup(p, t).group).toBe("A");
+  expect(operationGroup(p, t).group).toBe("A**");
+});
+it.each([
+  ["32D", "**D"],
+  ["07D", "**D"],
+  ["01C", "**C"],
+  ["03C", "**C"],
+  ["32SH", "**SH"],
+  ["16S", "**S"],
+  ["43H", "**H"],
+  ["39C●", "**C●"],
+  ["A01", "A**"],
+  ["01A", "**A"],
+  ["*01", "\\***"],
+  ["01*", "**\\*"],
+  ["123", null],
+])("groups %s as %s", (number, group) => {
+  expect(operationPattern(number)).toBe(group);
+});
+it("switches formation sources and uses group cars and capacity independently", () => {
+  const p = fixture(),
+    t = p.timetables[0].trains[0];
+  const caps = p.capacitySettings!;
+  p.types.find((type) => type.id === t.typeId)!.carCount = 5;
+  caps.operationGroups!["**C"] = {
+    value: 400,
+    kind: "transport",
+    basis: "グループ",
+    carCount: 8,
+  };
+  caps.operationGroupCars = { "**C●": 3 };
+  caps.formationSource = "type";
+  expect(transportCapacity(p, "weekday", t.id)).toBe(200);
+  expect(trainCarCount(p, "weekday", t)).toBe(5);
+  caps.formationSource = "operation";
+  expect(capacityForTrain(p, "weekday", t)).toMatchObject({
+    source: "operation",
+    spec: { value: 400 },
+  });
+  expect(trainCarCount(p, "weekday", t)).toBe(8);
+  t.capacity = 300;
+  expect(capacityForTrain(p, "weekday", t)).toMatchObject({
+    source: "train",
+    spec: { value: 300 },
+  });
+  delete t.capacity;
+  t.operationNumbers = ["39C●"];
+  expect(transportCapacity(p, "weekday", t.id)).toBe(200);
+  expect(trainCarCount(p, "weekday", t)).toBe(3);
+  const copy = JSON.parse(JSON.stringify(p));
+  validateProject(copy);
+  expect(trainCarCount(copy, "weekday", copy.timetables[0].trains[0])).toBe(3);
+  t.operationNumbers = [];
+  expect(transportCapacity(p, "weekday", t.id)).toBe(200);
+  expect(trainCarCount(p, "weekday", t)).toBe(5);
 });
 it("does not inherit operation groups from train numbers or unnumbered record connections", () => {
   const p = fixture(),
@@ -232,6 +292,21 @@ it("omits passes in presentation while preserving routing data and uses the full
   expect(v.destination).toBe(p.stations[4].name);
   expect(v.departureTrack).toBe("3番線");
   expect(v.arrivalTrack).toBe("7番線");
+});
+it("shows the formation assigned to the train of each journey leg", () => {
+  const p = fixture();
+  const journeyLeg = leg(p);
+  const caps = p.capacitySettings!;
+  caps.formationSource = "operation";
+  caps.operationGroupCars = { "**C": 6 };
+  expect(legPresentation(p, journeyLeg).carCount).toBe(6);
+  caps.trains['["weekday","t"]'] = {
+    value: 400,
+    kind: "transport",
+    basis: "列車別",
+    carCount: 8,
+  };
+  expect(legPresentation(p, journeyLeg).carCount).toBe(8);
 });
 it("uses external destination metadata without generating an external ride", () => {
   const p = fixture(),

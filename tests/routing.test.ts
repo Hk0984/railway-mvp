@@ -6,6 +6,7 @@ import {
   validateJourney,
 } from "../src/routing";
 import { analyzeService } from "../src/service";
+import { lineStationPath } from "../src/line-topology";
 import { sampleProject } from "../src/sample";
 import type { Project, Train, Stop } from "../src/model";
 import type {
@@ -47,6 +48,111 @@ const selection = (p: Project, datasetId = "a"): DatasetSelection => ({
   timetableId: p.timetables[0].id,
 });
 describe("時刻表経路検索", () => {
+  it.each(["depart", "arrive"] as const)(
+    "keeps forward connections when a faster overshoot would dominate in %s mode",
+    (mode) => {
+      const p = fixture();
+      p.timetables[0].trains = [
+        train("feeder", [s("s0", undefined, 60), s("s1", 180)]),
+        train("local", [s("s1", undefined, 240), s("s3", 720)]),
+        train("overshoot", [
+          s("s0", undefined, 120),
+          s("s3", undefined, undefined, "pass"),
+          s("s4", 300),
+        ]),
+        train("return", [s("s4", undefined, 360), s("s3", 480)]),
+      ];
+      const idx = buildRoutingIndex([selection(p)]);
+      const query = q({
+        destination: ref("s3"),
+        time: mode === "depart" ? 0 : 900,
+        mode,
+        minimumTransferSeconds: 60,
+      });
+      const old = searchJourneys(idx, query);
+      expect(old.journeys[0].legs.map((l) => l.trainId)).toEqual([
+        "overshoot",
+        "return",
+      ]);
+      const forward = {
+        ...query,
+        stationPath: lineStationPath(p, "s0", "s3")!.map((id) => ref(id)),
+      };
+      const found = searchJourneys(idx, forward);
+      expect(found.journeys.map((j) => j.legs.map((l) => l.trainId))).toEqual([
+        ["feeder", "local"],
+      ]);
+      expect(validateJourney(idx, forward, found.journeys[0])).toEqual([]);
+      expect(validateJourney(idx, forward, old.journeys[0])).not.toEqual([]);
+    },
+  );
+
+  it("excludes a direct train that doubles back, even after an unrestricted cache lookup", () => {
+    const p = fixture();
+    p.timetables[0].trains = [
+      train("direct", [s("s0", undefined, 60), s("s3", 720)]),
+      train("backtrack", [
+        s("s0", undefined, 120),
+        s("s3", 240, 240, "pass"),
+        s("s4", 300, 360),
+        s("s3", 480),
+      ]),
+    ];
+    const idx = buildRoutingIndex([selection(p)]);
+    const query = q({ destination: ref("s3"), time: 0, directOnly: true });
+    expect(searchJourneys(idx, query).journeys[0].legs[0].trainId).toBe(
+      "backtrack",
+    );
+    const forward = {
+      ...query,
+      stationPath: lineStationPath(p, "s0", "s3")!.map((id) => ref(id)),
+    };
+    expect(
+      searchJourneys(idx, forward).journeys.map((j) => j.legs[0].trainId),
+    ).toEqual(["direct"]);
+  });
+
+  it("allows a transfer across branches even when train direction changes", () => {
+    const p = fixture();
+    p.oud2 = {
+      fileType: "OuDiaSecond.1.17",
+      serviceDayStart: 0,
+      positions: [],
+      externalTerminals: [],
+      emptyColumns: 0,
+      warnings: [],
+      links: [
+        ["s0", "s1"],
+        ["s1", "s2"],
+        ["s1", "s3"],
+        ["s3", "s4"],
+      ].map(([from, to]) => ({ from, to })),
+    };
+    p.timetables[0].trains = [
+      {
+        ...train("inbound", [s("s2", undefined, 60), s("s1", 180)]),
+        direction: "up",
+      },
+      train("outbound", [
+        s("s1", undefined, 240),
+        s("s3", 300, 300, "pass"),
+        s("s4", 360),
+      ]),
+    ];
+    const path = lineStationPath(p, "s2", "s4");
+    expect(path).toEqual(["s2", "s1", "s3", "s4"]);
+    const idx = buildRoutingIndex([selection(p)]);
+    const query = q({
+      origin: ref("s2"),
+      time: 0,
+      minimumTransferSeconds: 60,
+      stationPath: path!.map((id) => ref(id)),
+    });
+    const [journey] = searchJourneys(idx, query).journeys;
+    expect(journey.legs.map((l) => l.trainId)).toEqual(["inbound", "outbound"]);
+    expect(validateJourney(idx, query, journey)).toEqual([]);
+  });
+
   it("returns multiple direct routes with independently valid structured legs", () => {
     const p = sampleProject(),
       idx = buildRoutingIndex([selection(p)]),

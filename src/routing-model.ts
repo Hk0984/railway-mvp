@@ -25,10 +25,17 @@ export interface DatasetSelection {
   passengerOnly?: boolean;
 }
 export interface RouteQuery {
+  /** Recognize verified coupling and uncoupling for passenger guidance. */
+  formationContinuations?: boolean;
   /** Internal candidate storage. Expand selected journeys before display or validation. */
   compactProfile?: boolean;
+  /** Train IDs that cross the line boundary on the first or last leg. */
+  boundaryOriginTrains?: string[];
+  boundaryDestinationTrains?: string[];
   origin: StationRef;
   destination: StationRef;
+  /** Ordered physical stations, including passing stations, for a known route. */
+  stationPath?: readonly StationRef[];
   mode: "depart" | "arrive";
   time: number;
   maxTransfers: number;
@@ -42,6 +49,8 @@ export interface RouteQuery {
   candidateMode?: "earliest" | "choices";
 }
 export interface JourneyLeg {
+  /** This leg starts in the same portion of the train as the previous leg. */
+  continuation?: "couple" | "split";
   datasetId: string;
   timetableId: string;
   trainId: string;

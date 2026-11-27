@@ -1,5 +1,6 @@
 ﻿import {
   defaultParameters,
+  projectSchemaVersion,
   validateProject,
   type Project,
   type RoutePosition,
@@ -15,11 +16,22 @@ export interface Oud2Options {
 }
 const children = (n: OudNode, name: string) =>
   n.children.filter((c) => c.name === name);
+const operationKey = /^Operation(\d+)([BA])(?:\.(\d+)([BA]))?$/;
 const index = (raw: string, max: number, label: string) => {
   if (!/^\d+$/.test(raw) || Number(raw) >= max)
     throw new Error(`${label}: 添え字範囲外 ${raw}`);
   return Number(raw);
 };
+
+function parseOudColor(value: string | undefined) {
+  // OuDia2nd serializes Windows COLORREF as 00BBGGRR. CSS uses #RRGGBB.
+  const match = /^[0-9a-f]{2}([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(
+    value ?? "",
+  );
+  if (!match) return null;
+  const [, blue, green, red] = match;
+  return `#${red}${green}${blue}`.toLowerCase();
+}
 
 export function parseOud2(
   text: string,
@@ -53,7 +65,13 @@ export function parseOud2(
       "OuterTerminalJikokuRyaku",
       "OuterTerminalDiaRyaku",
     ],
-    Ressyasyubetsu: ["Syubetsumei", "Ryakusyou", "Hidden"],
+    Ressyasyubetsu: [
+      "Syubetsumei",
+      "Ryakusyou",
+      "Hidden",
+      "DiagramSenColor",
+      "JikokuhyouMojiColor",
+    ],
     Dia: ["DiaName"],
     Kudari: [],
     Nobori: [],
@@ -80,14 +98,14 @@ export function parseOud2(
       if (
         n.name === "Ressya" &&
         !known.Ressya.includes(k) &&
-        !/^Operation\d+[BA]$/.test(k)
+        !operationKey.test(k)
       )
         throw new Error(
           `列車の未対応項目 ${k}（${n.line}行の列車）。増解結・未知の運行条件は推測しません`,
         );
       if (
         !(known[n.name] ?? []).includes(k) &&
-        !(n.name === "Ressya" && /^Operation\d+[BA]$/.test(k))
+        !(n.name === "Ressya" && operationKey.test(k))
       ) {
         const label = `${n.name}.${k}`;
         unused.set(label, (unused.get(label) ?? 0) + 1);
@@ -187,7 +205,7 @@ export function parseOud2(
   const branchCount = positions.filter((x) => x.branchCorePositionId).length;
   if (branchCount)
     warnings.add(
-      `分岐の派生行${branchCount}件を基幹駅IDへ統合しました。時刻表行と原時刻は別途保持し、同名だけでは駅を統合しません。乗換経路検索は未対応です`,
+      `分岐の派生行${branchCount}件を基幹駅IDへ統合しました。時刻表行と原時刻は別途保持し、同名だけでは駅を統合しません`,
     );
   const types = children(rosen, "Ressyasyubetsu").map((n, i) => {
     if (!n.values.Syubetsumei) throw new Error("種別名がありません");
@@ -195,9 +213,24 @@ export function parseOud2(
       warnings.add(
         "隠し種別も登録列車として保持します。旅客営業の可否は種別名から推測しません",
       );
-    return { id: String(i), name: n.values.Syubetsumei };
+    const diagramColor = parseOudColor(n.values.DiagramSenColor);
+    const timetableColor = parseOudColor(n.values.JikokuhyouMojiColor);
+    if (
+      (n.values.DiagramSenColor !== undefined && !diagramColor) ||
+      (n.values.JikokuhyouMojiColor !== undefined && !timetableColor)
+    )
+      warnings.add(
+        `種別「${n.values.Syubetsumei}」の色に未対応の書式があります`,
+      );
+    return {
+      id: String(i),
+      name: n.values.Syubetsumei,
+      diagramColor,
+      timetableColor,
+    };
   });
   let emptyColumns = 0,
+    untimedTrains = 0,
     overnightTimes = 0;
   const operationCodes = new Set<number>();
   const timetables = children(rosen, "Dia").map((d, di) => ({
@@ -270,14 +303,12 @@ export function parseOud2(
             track: m![3],
           };
         });
-        if (
-          !stops.some(
-            (s) => s.arrival !== undefined || s.departure !== undefined,
-          )
-        )
-          fail("解析可能な時刻のない非空列車");
         if (v.Canceled !== undefined && !["0", "1"].includes(v.Canceled))
           fail("Canceledは0/1が必要です");
+        if (last === -1) {
+          untimedTrains++;
+          return [];
+        }
         const train: Train = {
           id: `oud-${di}-${dir.name}-${ti}`,
           number: v.Ressyabangou ?? "",
@@ -288,24 +319,37 @@ export function parseOud2(
           operations: [],
           sourceEkiJikoku: v.EkiJikoku,
         };
+        const attached = new Set<string>();
         for (const [key, value] of Object.entries(v)) {
-          const match = /^Operation(\d+)([BA])$/.exec(key);
-          if (!match) continue;
+          const match = operationKey.exec(key);
+          if (!match || match[3] !== undefined) continue;
           const position = order[index(match[1], order.length, "駅作業")],
             before = match[2] === "B";
-          for (const raw of value.split(",")) {
+          for (const [operationIndex, raw] of value.split(",").entries()) {
             const code = Number(raw.split("/")[0]);
-            if (!/^[03456]\//.test(raw))
-              fail(`未対応駅作業: ${key}=${raw}（増解結は未対応）`);
+            if (!/^[0-6]\//.test(raw)) fail(`未対応駅作業: ${key}=${raw}`);
             operationCodes.add(code);
             if (code === 0 && !/^0\/\d+\$[^$]*\$0$/.test(raw))
               fail(`入換作業の時刻適用設定は未対応: ${raw}`);
-            train.operations!.push({
+            const operation: StationOperation = {
               positionId: position.id,
               phase: before ? "before" : "after",
               code: code as StationOperation["code"],
               raw,
-            });
+            };
+            if (code === 1 || code === 2) {
+              const format = code === 1 ? /^1\/[01]\$\d*$/ : /^2\/[0-2]\$(?:[1-9]|10)\/\d*$/;
+              if (!format.test(raw)) fail(`増結・解結の構文不正: ${key}=${raw}`);
+              const nestedKey = `${key}.${operationIndex}${code === 1 ? "B" : "A"}`;
+              if (v[nestedKey] !== undefined) {
+                attached.add(nestedKey);
+                operation.children = v[nestedKey].split(",").map((item) => {
+                  if (!/^[03456]\//.test(item)) fail(`未対応の編成駅作業: ${nestedKey}=${item}`);
+                  return { positionId: position.id, phase: code === 1 ? "before" : "after", code: Number(item[0]) as StationOperation["code"], raw: item };
+                });
+              }
+            }
+            train.operations!.push(operation);
             if (code !== 4) continue;
             const parts = raw.split("$");
             const terminalIndex = index(
@@ -352,14 +396,23 @@ export function parseOud2(
             }
           }
         }
+        for (const key of Object.keys(v))
+          if (operationKey.exec(key)?.[3] !== undefined && !attached.has(key))
+            fail(`対応する増結・解結がない編成駅作業: ${key}`);
         return [train];
       });
     }),
   }));
-  if (!timetables.length || !timetables.some((d) => d.trains.length))
-    throw new Error("ダイヤ・列車を抽出できませんでした");
+  if (!timetables.some((d) => d.trains.length))
+    throw new Error(
+      untimedTrains
+        ? "解析可能な時刻のある列車がありません"
+        : "ダイヤ・列車を抽出できませんでした",
+    );
   if (emptyColumns)
     warnings.add(`空の時刻表列${emptyColumns}件を列車数から除外しました`);
+  if (untimedTrains)
+    warnings.add(`解析可能な駅時刻のない列車${untimedTrains}件を除外しました`);
   if (overnightTimes)
     warnings.add(
       `運行日起点より前の明示時刻${overnightTimes}項目を翌日として正規化しました。原EkiJikokuは保持しています`,
@@ -370,7 +423,7 @@ export function parseOud2(
     );
   if (operationCodes.size)
     warnings.add(
-      `駅作業（コード${[...operationCodes].sort().join("/")}）の原文を保持。路線外発着以外の入換・入出区・列車接続・運用番号は運用シミュレーションや旅客直通の連結に使用しません`,
+      `駅作業（コード${[...operationCodes].sort().join("/")}）の原文を保持。乗換案内では、FileType 1.17の増結・解結で一意に確認できた乗車継続を扱います`,
     );
   warnings.add(
     "人口等の都市属性は原ファイルにないため初期値0。回送・試運転等の営業可否は推測しません。集計対象の種別を確認してください",
@@ -383,7 +436,7 @@ export function parseOud2(
       `未解析設定 ${label}（${count}件）：描画・表示等の設定は解析に利用しません`,
     );
   const project: Project = {
-    schemaVersion: 1,
+    schemaVersion: projectSchemaVersion,
     name: rosen.values.Rosenmei ?? "名称なし路線",
     stations,
     types,

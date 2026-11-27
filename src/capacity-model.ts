@@ -1,18 +1,30 @@
-import type { Project } from "./model";
+import type { Project, Train } from "./model";
 import { trainClassKey } from "./classification";
-import { operationGroup } from "./operation-numbers";
+import { isOperationPattern, operationGroup } from "./operation-numbers";
 export interface CapacitySpec {
   value: number;
   kind: "seats" | "transport";
   basis: string;
   vehicle?: string;
+  carCount?: number;
+}
+export interface FormationValues {
+  capacity?: number;
+  carCount?: number;
 }
 export interface CapacitySettings {
+  formationSource?: "type" | "operation";
   operationGroups?: Record<string, CapacitySpec>;
+  operationGroupCars?: Record<string, number>;
+  ungroupedOperationCapacity?: number;
+  formationSections?: Record<string, Record<string, FormationValues>>;
   timetables: Record<string, CapacitySpec>;
   trains: Record<string, CapacitySpec>;
   types: Record<string, CapacitySpec>;
 }
+export type CapacitySource =
+  "train" | "operation" | "ungrouped" | "formation" | "type" | "unknown";
+
 export function capacitySpec(
   p: Project,
   diaId: string,
@@ -22,38 +34,121 @@ export function capacitySpec(
     .find((d) => d.id === diaId)
     ?.trains.find((t) => t.id === trainId);
   if (!train) return null;
-  const c = p.capacitySettings;
-  return (
-    c?.trains[trainClassKey(diaId, trainId)] ??
-    (train.capacity === undefined
-      ? undefined
-      : {
-          value: train.capacity,
-          kind: "transport",
-          basis: "旧Train.capacityの設定輸送定員",
-        }) ??
-    (operationGroup(p, train).group
-      ? c?.operationGroups?.[operationGroup(p, train).group!]
-      : undefined) ??
-    c?.types[train.typeId] ??
-    (p.typeCapacities?.[train.typeId] === undefined
-      ? undefined
-      : {
-          value: p.typeCapacities[train.typeId],
-          kind: "transport",
-          basis: "旧typeCapacitiesの設定輸送定員",
-        }) ??
-    c?.timetables[diaId] ??
-    null
-  );
+  return capacityForTrain(p, diaId, train).spec;
 }
+
+function configuredOperationGroup(p: Project, train: Train) {
+  const c = p.capacitySettings;
+  if (
+    !c ||
+    c.formationSource === "type" ||
+    (!c.operationGroups &&
+      !c.operationGroupCars &&
+      c.ungroupedOperationCapacity === undefined)
+  )
+    return null;
+  return operationGroup(p, train, c.formationSource === undefined).group;
+}
+
+export function capacityForTrain(
+  p: Project,
+  diaId: string,
+  train: Train,
+): {
+  spec: CapacitySpec | null;
+  source: CapacitySource;
+} {
+  const c = p.capacitySettings;
+  const individual = c?.trains[trainClassKey(diaId, train.id)];
+  if (individual) return { spec: individual, source: "train" };
+  if (train.capacity !== undefined)
+    return {
+      spec: {
+        value: train.capacity,
+        kind: "transport",
+        basis: "旧Train.capacityの設定輸送定員",
+      },
+      source: "train",
+    };
+  const group = configuredOperationGroup(p, train);
+  const operation = group && c?.operationGroups?.[group];
+  if (operation) return { spec: operation, source: "operation" };
+  if (
+    c?.formationSource === "operation" &&
+    c.ungroupedOperationCapacity !== undefined &&
+    !train.cancelled &&
+    !group
+  )
+    return {
+      spec: {
+        value: c.ungroupedOperationCapacity,
+        kind: "transport",
+        basis: "未分類列車の仮輸送定員",
+      },
+      source: "ungrouped",
+    };
+  const type = c?.types[train.typeId];
+  if (type) return { spec: type, source: "type" };
+  const typeCapacity = p.typeCapacities?.[train.typeId];
+  if (typeCapacity !== undefined)
+    return {
+      spec: {
+        value: typeCapacity,
+        kind: "transport",
+        basis: "旧typeCapacitiesの設定輸送定員",
+      },
+      source: "type",
+    };
+  return { spec: c?.timetables[diaId] ?? null, source: "unknown" };
+}
+
 export function transportCapacity(p: Project, diaId: string, trainId: string) {
   const spec = capacitySpec(p, diaId, trainId);
   return spec?.kind === "transport" ? spec.value : null;
 }
+
+export function trainCarCount(p: Project, diaId: string, train: Train) {
+  const c = p.capacitySettings;
+  const group = configuredOperationGroup(p, train);
+  return (
+    c?.trains[trainClassKey(diaId, train.id)]?.carCount ??
+    (group
+      ? (c?.operationGroupCars?.[group] ??
+        c?.operationGroups?.[group]?.carCount)
+      : undefined) ??
+    p.types.find((type) => type.id === train.typeId)?.carCount ??
+    c?.types[train.typeId]?.carCount ??
+    c?.timetables[diaId]?.carCount
+  );
+}
+
 export function validateCapacitySettings(p: Project) {
   const c = p.capacitySettings;
   if (!c) return;
+  if (
+    c.formationSource !== undefined &&
+    !["type", "operation"].includes(c.formationSource)
+  )
+    throw new Error("編成設定方法が不正です");
+  if (
+    c.ungroupedOperationCapacity !== undefined &&
+    (!Number.isSafeInteger(c.ungroupedOperationCapacity) ||
+      c.ungroupedOperationCapacity <= 0)
+  )
+    throw new Error("未分類列車の仮輸送定員は1以上の整数を入力してください");
+  if (
+    c.operationGroupCars !== undefined &&
+    (!c.operationGroupCars ||
+      typeof c.operationGroupCars !== "object" ||
+      Array.isArray(c.operationGroupCars) ||
+      Object.entries(c.operationGroupCars).some(
+        ([key, cars]) =>
+          !isOperationPattern(key) || !Number.isSafeInteger(cars) || cars <= 0,
+      ))
+  )
+    throw new Error(
+      "運用番号グループの編成両数は1以上の整数を入力してください",
+    );
   const refs = [
     new Set(p.timetables.map((d) => d.id)),
     new Set(
@@ -63,6 +158,45 @@ export function validateCapacitySettings(p: Project) {
     ),
     new Set(p.types.map((t) => t.id)),
   ];
+  if (c.formationSections !== undefined) {
+    if (
+      !c.formationSections ||
+      typeof c.formationSections !== "object" ||
+      Array.isArray(c.formationSections)
+    )
+      throw new Error("増結・解結の区間別編成設定が不正です");
+    const trains = new Map(
+      p.timetables.flatMap((d) =>
+        d.trains.map((t) => [trainClassKey(d.id, t.id), t] as const),
+      ),
+    );
+    for (const [key, sections] of Object.entries(c.formationSections)) {
+      const train = trains.get(key);
+      if (
+        !train ||
+        !sections ||
+        typeof sections !== "object" ||
+        Array.isArray(sections) ||
+        Object.entries(sections).some(
+          ([id, values]) =>
+            !train.stops.some(
+              (stop) =>
+                stop.status !== "none" &&
+                (stop.positionId ?? stop.stationId) === id,
+            ) ||
+            !values ||
+            typeof values !== "object" ||
+            Array.isArray(values) ||
+            [values.capacity, values.carCount].some(
+              (value) =>
+                value !== undefined &&
+                (!Number.isSafeInteger(value) || value <= 0),
+            ),
+        )
+      )
+        throw new Error("増結・解結の区間別編成設定が不正です");
+    }
+  }
   for (const [i, map] of [
     c.timetables,
     c.trains,
@@ -73,14 +207,18 @@ export function validateCapacitySettings(p: Project) {
       throw new Error("定員設定の形式不正");
     for (const [key, s] of Object.entries(map))
       if (
-        (i === 3 ? !/^[A-Z]+$/.test(key) : !refs[i].has(key)) ||
+        (i === 3
+          ? !/^[A-Z]+$/.test(key) && !isOperationPattern(key)
+          : !refs[i].has(key)) ||
         !s ||
         !Number.isInteger(s.value) ||
         s.value <= 0 ||
         !["seats", "transport"].includes(s.kind) ||
         typeof s.basis !== "string" ||
         !s.basis.trim() ||
-        (s.vehicle !== undefined && typeof s.vehicle !== "string")
+        (s.vehicle !== undefined && typeof s.vehicle !== "string") ||
+        (s.carCount !== undefined &&
+          (!Number.isSafeInteger(s.carCount) || s.carCount <= 0))
       )
         throw new Error("定員設定の参照・種別・根拠が不正です");
   }

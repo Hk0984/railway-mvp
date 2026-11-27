@@ -8,7 +8,11 @@ import {
   type AssignmentConfig,
 } from "../src/assignment-model";
 import { validateProject, type Train, type Stop } from "../src/model";
-import { capacitySpec, transportCapacity } from "../src/capacity-model";
+import {
+  capacitySpec,
+  trainCarCount,
+  transportCapacity,
+} from "../src/capacity-model";
 const stop = (
   stationId: string,
   arrival?: number,
@@ -214,6 +218,64 @@ describe("定員制約の時系列配分", () => {
     validateProject(p);
     p.capacitySettings.trains['["d","a"]'].basis = "";
     expect(() => validateProject(p)).toThrow("根拠");
+  });
+  it("inherits the type's car count independently of the train's capacity", () => {
+    const a = train("a", 100, 200, 800);
+    const p = project([a]);
+    p.capacitySettings = {
+      timetables: {},
+      types: {
+        local: { kind: "transport", value: 600, basis: "種別", carCount: 6 },
+      },
+      trains: {},
+    };
+    expect(trainCarCount(p, "d", a)).toBe(6);
+    p.types[0].carCount = 8;
+    expect(trainCarCount(p, "d", a)).toBe(8);
+    expect(transportCapacity(p, "d", a.id)).toBe(800);
+    p.capacitySettings.trains['["d","a"]'] = {
+      kind: "transport",
+      value: 800,
+      basis: "列車別",
+      carCount: 10,
+    };
+    expect(trainCarCount(p, "d", a)).toBe(10);
+    validateProject(p);
+    p.types[0].carCount = 0;
+    expect(() => validateProject(p)).toThrow("種別の編成両数");
+  });
+  it("applies the provisional capacity only to ungrouped trains in operation mode", () => {
+    const a = train("a", 100, 200);
+    const b = train("b", 500, 600);
+    b.operationNumbers = ["32D"];
+    const p = project([a, b]);
+    const caps = (p.capacitySettings = {
+      formationSource: "operation",
+      ungroupedOperationCapacity: 60,
+      trains: {},
+      types: { local: { value: 90, kind: "transport", basis: "種別" } },
+      timetables: {},
+    });
+    expect(transportCapacity(p, "d", "a")).toBe(60);
+    expect(transportCapacity(p, "d", "b")).toBe(90);
+    const r = assignDemand(
+      buildRoutingIndex([{ datasetId: "cap", project: p, timetableId: "d" }]),
+      [row()],
+      config(),
+    );
+    expect(r.capacity!.loads.find((l) => l.trainId === "a")).toMatchObject({
+      capacity: 60,
+      capacitySource: "ungrouped",
+      segmentLoads: [60],
+    });
+    p.capacitySettings!.formationSource = "type";
+    expect(transportCapacity(p, "d", "a")).toBe(90);
+    p.capacitySettings!.formationSource = "operation";
+    a.capacity = 100;
+    expect(transportCapacity(p, "d", "a")).toBe(100);
+    validateProject(JSON.parse(JSON.stringify(p)));
+    caps.ungroupedOperationCapacity = 0;
+    expect(() => validateProject(p)).toThrow("未分類列車の仮輸送定員");
   });
   it("does not use non-passenger trains", () => {
     const a = train("a", 100, 200, 60),

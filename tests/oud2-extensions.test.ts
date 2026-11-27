@@ -3,7 +3,8 @@ import { parseOud2 } from "../src/oud2";
 import { parseOudTime, decodeOud2 } from "../src/oud2-text";
 import { directTrains, stationDepartures, trainVisits } from "../src/analysis";
 import { timetableCosts } from "../src/demand";
-import { validateProject } from "../src/model";
+import { projectSchemaVersion, validateProject } from "../src/model";
+import { trainTypeColors } from "../src/train-type-colors";
 
 function fixture({
   up = false,
@@ -15,6 +16,58 @@ function fixture({
   return `FileType=OuDiaSecond.1.17\nRosen.\nRosenmei=検証線\nEki.\nEkimei=甲\nOuterTerminal.\nOuterTerminalEkimei=路線外A\n.\n.\nEki.\nEkimei=乙\n${branch ? "BrunchCoreEkiIndex=0\n" : ""}OuterTerminal.\nOuterTerminalEkimei=路線外B\n.\n.\nRessyasyubetsu.\nSyubetsumei=普通\n.\nDia.\nDiaName=試験\n${up ? "Nobori" : "Kudari"}.\nRessya.\nSyubetsu=0\n${canceled ? "Canceled=1\n" : ""}EkiJikoku=${eki}\nOperation0B=${operation}\n.\nRessya.\n.\n.\n.\nKitenJikoku=400\n.\nDispProp.\nJikokuhyouFont=A\nJikokuhyouFont=B\n.\n`;
 }
 describe("実ファイルで確認した書式の回帰", () => {
+  it("converts COLORREF to CSS for both type colors and round-trips via project JSON", () => {
+    const { project, warnings } = parseOud2(
+      fixture().replace(
+        "Syubetsumei=普通",
+        "Syubetsumei=普通\nDiagramSenColor=0012CDef\nJikokuhyouMojiColor=00FE6100",
+      ),
+    );
+    const copy = JSON.parse(JSON.stringify(project));
+    expect(copy.schemaVersion).toBe(projectSchemaVersion);
+    expect(() => validateProject(copy)).not.toThrow();
+    expect(trainTypeColors(copy.types).get("0")).toEqual({
+      diagram: "#efcd12",
+      timetable: "#0061fe",
+    });
+    expect(warnings.join("\n")).not.toMatch(
+      /DiagramSenColor|JikokuhyouMojiColor/,
+    );
+    copy.types[0].diagramColor = "red;display:none";
+    expect(() => validateProject(copy)).toThrow("種別色");
+  });
+
+  it("rejects legacy JSON and incomplete color records in the new format", () => {
+    const { project } = parseOud2(fixture());
+    expect(() => validateProject({ ...project, schemaVersion: 1 })).toThrow(
+      "旧形式のJSON",
+    );
+    const { id, name, diagramColor } = project.types[0];
+    expect(() =>
+      validateProject({ ...project, types: [{ id, name, diagramColor }] }),
+    ).toThrow("時刻表文字色");
+  });
+
+  it("records unconfigured OuDia2nd colors explicitly and uses the available color", () => {
+    const { project, warnings } = parseOud2(
+      fixture().replace(
+        "Syubetsumei=普通",
+        "Syubetsumei=普通\nDiagramSenColor=invalid\nJikokuhyouMojiColor=00000000",
+      ),
+    );
+    expect(warnings.join("\n")).toContain("色に未対応の書式");
+    expect(trainTypeColors(project.types).get("0")).toEqual({
+      diagram: "#000000",
+      timetable: "#000000",
+    });
+    expect(parseOud2(fixture()).project.types[0]).toEqual({
+      id: "0",
+      name: "普通",
+      diagramColor: null,
+      timetableColor: null,
+    });
+  });
+
   it("keeps scoped external origins without adding OD stations", () => {
     const p = parseOud2(fixture()).project;
     const t = p.timetables[0].trains[0];
@@ -24,6 +77,27 @@ describe("実ファイルで確認した書式の回帰", () => {
     expect(p.oud2!.emptyColumns).toBe(1);
     expect(directTrains(p.timetables[0], "oud-s0", "oud-s1")[0].departure).toBe(
       29100,
+    );
+  });
+  it.each(["", "0,0", "1;/$0,2"])(
+    "excludes untimed nonempty train columns without renumbering timed ones (%j)",
+    (eki) => {
+      const { project, warnings } = parseOud2(
+        fixture({ eki }).replace(
+          "Ressya.\n.\n.\n.",
+          "Ressya.\n.\nRessya.\nSyubetsu=0\nEkiJikoku=1;900,1;925/\n.\n.\n.",
+        ),
+      );
+      const [dia] = project.timetables;
+      expect(dia.trains.map(({ id }) => id)).toEqual(["oud-0-Kudari-2"]);
+      expect(directTrains(dia, "oud-s0", "oud-s1")).toHaveLength(1);
+      expect(project.oud2!.emptyColumns).toBe(1);
+      expect(warnings).toContain("解析可能な駅時刻のない列車1件を除外しました");
+    },
+  );
+  it("reports when a file has no timed trains after exclusion", () => {
+    expect(() => parseOud2(fixture({ eki: "1,2" }))).toThrow(
+      "解析可能な時刻のある列車がありません",
     );
   });
   it("uses direction-order operation index for up trains", () => {
@@ -65,7 +139,7 @@ describe("実ファイルで確認した書式の回帰", () => {
       fixture().replace("Operation0B=", "Operation0B.0A="),
       fixture().replace("Syubetsu=0", "Syubetsu=0\nMysteryServiceRule=1"),
       fixture().replace("Ressya.\n.", "Ressya.\nHoukou=Kudari\n."),
-      fixture({ operation: "1/0$755" }),
+      fixture({ operation: "1/9$755" }),
     ])
       expect(() => parseOud2(text)).toThrow();
   });

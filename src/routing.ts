@@ -1,6 +1,7 @@
 import { trainVisits } from "./analysis";
 import type { Stop, Train } from "./model";
 import { isPassengerTrain, classificationCounts } from "./classification";
+import { passengerFormationConnections } from "./operation-connections";
 import {
   stationKey,
   type DatasetSelection,
@@ -13,7 +14,7 @@ import {
   type TransferLink,
 } from "./routing-model";
 
-interface Trip {
+export interface Trip {
   selection: DatasetSelection;
   train: Train;
   visits: Stop[];
@@ -21,16 +22,19 @@ interface Trip {
   refs: StationRef[];
   stationKeys: string[];
 }
-interface Board {
+export interface Board {
   id: number;
   trip: Trip;
   index: number;
   departure: number;
 }
-interface Ride {
+export interface Ride {
   trip: Trip;
   i: number;
   j: number;
+  departure: number;
+  arrival: number;
+  continuation?: JourneyLeg["continuation"];
 }
 interface Walk {
   to: StationRef;
@@ -68,14 +72,51 @@ export function clearRoutingProfileCache() {
 export interface RoutingIndex {
   selections: DatasetSelection[];
   boards: Map<string, Board[]>;
+  boundaryBoards?: Map<string, Board[]>;
   trips: Map<string, Trip>;
   stations: Set<string>;
   walks: Map<string, Walk[]>;
   warnings: string[];
 }
+type ThroughConnection = {
+  to: Trip;
+  index: number;
+  kind: NonNullable<JourneyLeg["continuation"]>;
+};
+const formationLinks = new WeakMap<
+  RoutingIndex,
+  Map<Trip, Map<number, ThroughConnection[]>>
+>();
+function throughConnections(index: RoutingIndex) {
+  const cached = formationLinks.get(index);
+  if (cached) return cached;
+  const links = new Map<Trip, Map<number, ThroughConnection[]>>();
+  for (const { project, timetableId, datasetId } of index.selections) {
+    const timetable = project.timetables.find((d) => d.id === timetableId)!;
+    for (const connection of passengerFormationConnections(
+      project,
+      timetable,
+    )) {
+      const from = index.trips.get(
+        tripKey(datasetId, timetableId, connection.from.id),
+      );
+      const to = index.trips.get(
+        tripKey(datasetId, timetableId, connection.to.id),
+      );
+      if (!from || !to) continue;
+      const byStop = links.get(from) ?? new Map<number, ThroughConnection[]>();
+      links.set(from, byStop);
+      const atStop = byStop.get(connection.fromIndex) ?? [];
+      byStop.set(connection.fromIndex, atStop);
+      atStop.push({ to, index: connection.toIndex, kind: connection.kind });
+    }
+  }
+  formationLinks.set(index, links);
+  return links;
+}
 const canBoard = (s: Stop) =>
   s.status === "stop" && s.pickupAllowed !== false && s.departure !== undefined;
-const canAlight = (s: Stop) =>
+export const canAlight = (s: Stop) =>
   s.status === "stop" && s.dropoffAllowed !== false && s.arrival !== undefined;
 const tripKey = (datasetId: string, dia: string, train: string) =>
   JSON.stringify([datasetId, dia, train]);
@@ -118,7 +159,10 @@ export function validateTransferLinks(
 export function buildRoutingIndex(
   selections: DatasetSelection[],
   links: TransferLink[] = [],
-  options: { permittedRestrictions?: string[] } = {},
+  options: {
+    permittedRestrictions?: string[];
+    includeBoundaryBoards?: boolean;
+  } = {},
 ): RoutingIndex {
   if (
     !selections.length ||
@@ -129,6 +173,9 @@ export function buildRoutingIndex(
     trips = new Map<string, Trip>(),
     stations = new Set<string>(),
     warnings = new Set<string>();
+  const boundaryBoards = options.includeBoundaryBoards
+    ? new Map<string, Board[]>()
+    : undefined;
   let boardId = 0;
   for (const selection of selections) {
     const { datasetId, project, timetableId } = selection;
@@ -175,15 +222,20 @@ export function buildRoutingIndex(
       };
       trips.set(trip.key, trip);
       trip.visits.forEach((s, index) => {
-        if (!canBoard(s)) return;
-        const key = trip.stationKeys[index];
-        const list = boards.get(key) ?? [];
-        list.push({ id: boardId++, trip, index, departure: s.departure! });
-        boards.set(key, list);
+        const store = (target: Map<string, Board[]>, departure: number) => {
+          const key = trip.stationKeys[index];
+          const list = target.get(key) ?? [];
+          list.push({ id: boardId++, trip, index, departure });
+          target.set(key, list);
+        };
+        if (canBoard(s)) store(boards, s.departure!);
+        const departure = s.departure ?? s.arrival;
+        if (boundaryBoards && index === 0 && departure !== undefined)
+          store(boundaryBoards, departure);
       });
     }
   }
-  for (const list of boards.values())
+  for (const list of [...boards.values(), ...(boundaryBoards?.values() ?? [])])
     list.sort(
       (a, b) =>
         a.departure - b.departure || a.trip.key.localeCompare(b.trip.key),
@@ -247,7 +299,7 @@ export function buildRoutingIndex(
     walks.set(source, [...best.values()]);
   }
   warnings.add(
-    "列車レコード間の直通継続は確定しません。別レコードへの乗継は最低乗換時間を適用します。路線外発着は表示情報のみです",
+    "列車レコード間の乗継は、乗換案内で確認できた増結・解結の直通を除き、最低乗換時間を適用します。路線外発着は表示情報のみです",
   );
   warnings.add(
     "着時刻が欠ける駅での降車・乗換は生成しません。通過・運転停車（扱い2）で乗降しません。徒歩リンクは列車間の乗換に使用し、最初・最後の徒歩だけの移動は未対応です",
@@ -255,6 +307,7 @@ export function buildRoutingIndex(
   return {
     selections,
     boards,
+    boundaryBoards,
     trips,
     stations,
     walks,
@@ -281,10 +334,12 @@ function chain(label: Label) {
   }
   return nodes.reverse();
 }
+export const rideKey = (ride: Ride, walkIds: string[] = []) =>
+  JSON.stringify([ride.trip.key, ride.i, ride.j, walkIds]);
 function signature(label: Label) {
   return chain(label)
-    .map((p) =>
-      JSON.stringify([p.ride.trip.key, p.ride.i, p.ride.j, p.walkIds]),
+    .map(
+      ({ ride, walkIds }) => (ride.continuation ?? "") + rideKey(ride, walkIds),
     )
     .join("");
 }
@@ -324,44 +379,69 @@ function insert(
   return true;
 }
 function materialize(l: Label, includeStops = true): Journey {
-  const nodes = chain(l),
-    transfers = nodes.flatMap((n) => (n.transfer ? [n.transfer] : []));
-  const legs: JourneyLeg[] = nodes.map(({ ride: { trip, i, j } }) => {
-    const a = trip.visits[i],
-      b = trip.visits[j],
-      s = trip.selection;
-    return {
-      datasetId: s.datasetId,
-      timetableId: s.timetableId,
-      trainId: trip.train.id,
-      trainNumber: trip.train.number,
-      typeId: trip.train.typeId,
-      typeName: s.project.types.find((t) => t.id === trip.train.typeId)!.name,
-      origin: trip.refs[i],
-      destination: trip.refs[j],
-      departure: a.departure!,
-      arrival: b.arrival!,
-      boardIndex: i,
-      alightIndex: j,
-      stops: includeStops
-        ? trip.visits.slice(i, j + 1).map((x) => ({ ...x }))
-        : [],
-    };
-  });
+  const nodes = chain(l);
+  return journeyFromRides(
+    nodes.map(({ ride }) => ride),
+    nodes.flatMap((n) => (n.transfer ? [n.transfer] : [])),
+    signature(l),
+    includeStops,
+  );
+}
+export function journeyFromRides(
+  rides: Ride[],
+  transfers: JourneyTransfer[],
+  id: string,
+  includeStops = false,
+): Journey {
+  const legs: JourneyLeg[] = rides.map(
+    ({ trip, i, j, departure, arrival, continuation }) => {
+      const s = trip.selection;
+      return {
+        ...(continuation && { continuation }),
+        datasetId: s.datasetId,
+        timetableId: s.timetableId,
+        trainId: trip.train.id,
+        trainNumber: trip.train.number,
+        typeId: trip.train.typeId,
+        typeName: s.project.types.find((t) => t.id === trip.train.typeId)!.name,
+        origin: trip.refs[i],
+        destination: trip.refs[j],
+        departure,
+        arrival,
+        boardIndex: i,
+        alightIndex: j,
+        stops: includeStops
+          ? trip.visits.slice(i, j + 1).map((x) => ({ ...x }))
+          : [],
+      };
+    },
+  );
+  const departure = rides[0].departure,
+    arrival = rides.at(-1)!.arrival;
   return {
-    id: signature(l),
-    departure: l.departure,
-    arrival: l.arrival,
-    elapsedSeconds: l.arrival - l.departure,
-    ridingSeconds: l.riding,
-    walkingSeconds: l.walking,
+    id,
+    departure,
+    arrival,
+    elapsedSeconds: arrival - departure,
+    ridingSeconds: rides.reduce(
+      (sum, ride, i) =>
+        sum +
+        ride.arrival -
+        (ride.continuation ? rides[i - 1].arrival : ride.departure),
+      0,
+    ),
+    walkingSeconds: transfers.reduce((sum, t) => sum + t.walkingSeconds, 0),
     transferWaitSeconds: transfers.reduce((s, t) => s + t.waitingSeconds, 0),
-    transferCount: l.depth - 1,
+    transferCount: transfers.length,
     legs,
     transfers,
     valid: true,
   };
 }
+function pathPositions(path: RouteQuery["stationPath"]) {
+  return path && new Map(path.map((station, i) => [stationKey(station), i]));
+}
+
 function checkQuery(index: RoutingIndex, q: RouteQuery) {
   if (
     !index.stations.has(stationKey(q.origin)) ||
@@ -390,14 +470,24 @@ function checkQuery(index: RoutingIndex, q: RouteQuery) {
       q.windowEnd < q.windowStart)
   )
     throw new Error("検索時間範囲が不正です");
+  const positions = pathPositions(q.stationPath);
+  if (
+    positions &&
+    (positions.size !== q.stationPath!.length ||
+      positions.get(stationKey(q.origin)) !== 0 ||
+      positions.get(stationKey(q.destination)) !== positions.size - 1 ||
+      [...positions.keys()].some((key) => !index.stations.has(key)))
+  )
+    throw new Error("検索経路の駅の並びが不正です");
+  return positions;
 }
 
-/** Boarding-round multi-label timetable search. This is not the optimized route-scanning RAPTOR.
- * Each edge is an actual board/alight pair in ONE train record. No generated running times.
+/** Boarding-round multi-label timetable search. Each ride uses explicit timetable times.
+ * Verified formation connections can extend a ride within the same boarding round.
  * Labels preserve arrival / first departure / riding / walking tradeoffs; rounds bound transfers.
  * The finite supplied service day is searched, including later departures outside a reporting window. */
 export function journeyProfile(index: RoutingIndex, q: RouteQuery): Journey[] {
-  checkQuery(index, q);
+  const positions = checkQuery(index, q);
   const originKey = stationKey(q.origin),
     destinationKey = stationKey(q.destination);
   if (originKey === destinationKey) return [];
@@ -432,13 +522,22 @@ export function journeyProfile(index: RoutingIndex, q: RouteQuery): Journey[] {
   let work = 0;
   const choices = q.candidateMode === "choices",
     ridingCriterion = q.sort === "riding" || choices;
-  const direct = q.directOnly || q.maxTransfers === 0,
+  const firstTrains = q.boundaryOriginTrains && new Set(q.boundaryOriginTrains);
+  const lastTrains =
+    q.boundaryDestinationTrains && new Set(q.boundaryDestinationTrains);
+  const continuations = q.formationContinuations
+    ? throughConnections(index)
+    : undefined;
+  const direct =
+      (q.directOnly || q.maxTransfers === 0) && !firstTrains && !lastTrains,
     cacheKey = JSON.stringify([
       originKey,
       earliest,
       latest,
       ridingCriterion,
       choices,
+      q.stationPath,
+      q.formationContinuations,
     ]);
   const cachedRound = direct
     ? directRounds.get(index)?.entries.get(cacheKey)
@@ -484,7 +583,15 @@ export function journeyProfile(index: RoutingIndex, q: RouteQuery): Journey[] {
             ? [{ to: base.station, seconds: 0, ids: [] }]
             : (index.walks.get(base.key) ?? []);
         for (const walk of targets) {
-          const boardList = index.boards.get(stationKey(walk.to)) ?? [];
+          const boardingKey = stationKey(walk.to);
+          if (
+            positions &&
+            (positions.get(boardingKey) ?? -1) < positions.get(base.key)!
+          )
+            continue;
+          const boardSource =
+            round === 1 && firstTrains ? index.boundaryBoards : index.boards;
+          const boardList = boardSource?.get(boardingKey) ?? [];
           const ready =
             base.arrival +
             walk.seconds +
@@ -496,6 +603,12 @@ export function journeyProfile(index: RoutingIndex, q: RouteQuery): Journey[] {
           ) {
             const board = boardList[bi];
             if (board.departure > latest) break;
+            if (
+              round === 1 &&
+              firstTrains &&
+              !firstTrains.has(board.trip.train.id)
+            )
+              continue;
             if (base.path?.ride.trip.key === board.trip.key) continue;
             const candidate: BoardingLabel = {
               base,
@@ -515,55 +628,114 @@ export function journeyProfile(index: RoutingIndex, q: RouteQuery): Journey[] {
       }
     for (const list of boardingLabels.values())
       for (const { base, walk, board, firstTrip } of list) {
-        for (let j = board.index + 1; j < board.trip.visits.length; j++) {
-          if (++work > 12000000)
-            throw new Error(
-              "経路候補の探索量上限に達しました。乗換回数・対象種別・データセットを絞ってください（不完全な結果は返しません）",
-            );
-          const stop = board.trip.visits[j];
-          if (
-            !canAlight(stop) ||
-            stop.arrival! < board.departure ||
-            stop.arrival! > latest
-          )
-            continue;
-          const key = board.trip.stationKeys[j],
-            station = board.trip.refs[j];
-          const label: Label = {
-            key,
-            station,
-            arrival: stop.arrival!,
-            departure: round === 1 ? board.departure : base.departure,
-            riding: base.riding + stop.arrival! - board.departure,
-            walking: base.walking + (walk.walkingSeconds ?? walk.seconds),
-            depth: round,
-            firstTrip,
-            path: {
-              previous: base.path,
-              ride: { trip: board.trip, i: board.index, j },
-              walkIds: walk.ids,
-            },
-          };
-          if (
-            (previousRounds.get(key) ?? []).some((old) =>
-              dominates(old, label, ridingCriterion, choices),
+        const walking = walk.walkingSeconds ?? walk.seconds;
+        const transfer: JourneyTransfer | undefined =
+          round === 1
+            ? undefined
+            : {
+                from: base.station,
+                to: walk.to,
+                arrival: base.arrival,
+                departure: board.departure,
+                walkingSeconds: walking,
+                waitingSeconds: board.departure - base.arrival - walking,
+                minimumSeconds: q.minimumTransferSeconds,
+                linkIds: walk.ids,
+              };
+        const pending: {
+          trip: Trip;
+          i: number;
+          departure: number;
+          previous: PathNode | null;
+          continuation?: Ride["continuation"];
+        }[] = [
+          {
+            trip: board.trip,
+            i: board.index,
+            departure: board.departure,
+            previous: base.path,
+          },
+        ];
+        while (pending.length) {
+          const { trip, i, departure, previous, continuation } = pending.pop()!;
+          let position = positions?.get(trip.stationKeys[i]) ?? -1;
+          const connections = continuations?.get(trip);
+          for (let j = i + 1; j < trip.visits.length; j++) {
+            if (++work > 12000000)
+              throw new Error(
+                "経路候補の探索量上限に達しました。乗換回数・対象種別・データセットを絞ってください（不完全な結果は返しません）",
+              );
+            const stop = trip.visits[j];
+            const key = trip.stationKeys[j];
+            if (positions) {
+              const nextPosition = positions.get(key);
+              // Passing stations count too, even when the train cannot alight there.
+              if (nextPosition === undefined || nextPosition <= position) break;
+              position = nextPosition;
+            }
+            const boundary = key === destinationKey && lastTrains;
+            const alight = boundary
+              ? boundary.has(trip.train.id) && j === trip.visits.length - 1
+              : canAlight(stop);
+            const links = connections?.get(j);
+            if (!alight && !links) continue;
+            const arrival =
+              boundary && !links
+                ? (stop.arrival ?? stop.departure)
+                : stop.arrival;
+            if (
+              arrival === undefined ||
+              arrival < departure ||
+              arrival > latest
             )
-          )
-            continue;
-          if (insert(next, label, ridingCriterion, choices) && round > 1)
-            label.path!.transfer = {
-              from: base.station,
-              to: walk.to,
-              arrival: base.arrival,
-              departure: board.departure,
-              walkingSeconds: walk.walkingSeconds ?? walk.seconds,
-              waitingSeconds:
-                board.departure -
-                base.arrival -
-                (walk.walkingSeconds ?? walk.seconds),
-              minimumSeconds: q.minimumTransferSeconds,
-              linkIds: walk.ids,
+              continue;
+            const path: PathNode = {
+              previous,
+              ride: {
+                trip,
+                i,
+                j,
+                departure,
+                arrival,
+                ...(continuation && { continuation }),
+              },
+              transfer: continuation ? undefined : transfer,
+              walkIds: continuation ? [] : walk.ids,
             };
+            for (const link of links ?? []) {
+              const nextDeparture = link.to.visits[link.index].departure!;
+              if (nextDeparture < arrival || nextDeparture > latest) continue;
+              let earlier: PathNode | null = path;
+              while (earlier && earlier.ride.trip !== link.to)
+                earlier = earlier.previous;
+              if (!earlier)
+                pending.push({
+                  trip: link.to,
+                  i: link.index,
+                  departure: nextDeparture,
+                  previous: path,
+                  continuation: link.kind,
+                });
+            }
+            if (!alight) continue;
+            const label: Label = {
+              key,
+              station: trip.refs[j],
+              arrival,
+              departure: round === 1 ? board.departure : base.departure,
+              riding: base.riding + arrival - board.departure,
+              walking: base.walking + walking,
+              depth: round,
+              firstTrip,
+              path,
+            };
+            if (
+              !(previousRounds.get(key) ?? []).some((old) =>
+                dominates(old, label, ridingCriterion, choices),
+              )
+            )
+              insert(next, label, ridingCriterion, choices);
+          }
         }
       }
     if (direct) {
@@ -657,7 +829,9 @@ export function searchJourneys(
       ? undefined
       : stationKey(q.origin) === stationKey(q.destination)
         ? "発着が同じ駅です。移動は不要です"
-        : "明示着発時刻・対象種別・時間・乗換条件を満たす経路がありません。欠損着時刻、終便後、未設定の徒歩連絡も確認してください",
+        : q.stationPath
+          ? "指定時刻と乗換条件で、折り返さずに到着できる経路がありません。"
+          : "明示着発時刻・対象種別・時間・乗換条件を満たす経路がありません。欠損着時刻、終便後、未設定の徒歩連絡も確認してください",
     displayLimited: all.length > limit,
   };
 }
@@ -669,6 +843,8 @@ export function validateJourney(
 ): string[] {
   const errors: string[] = [];
   if (!j.legs.length) return ["乗車区間なし"];
+  const positions = pathPositions(q.stationPath);
+  let position = -1;
   if (
     j.departure !== j.legs[0].departure ||
     j.arrival !== j.legs.at(-1)!.arrival
@@ -685,26 +861,43 @@ export function validateJourney(
   )
     errors.push("指定時刻違反");
   if (
-    j.transferCount !== j.legs.length - 1 ||
+    j.transferCount !==
+      j.legs.slice(1).filter((leg) => !leg.continuation).length ||
     j.transferCount > (q.directOnly ? 0 : q.maxTransfers) ||
-    j.transfers.length !== j.transferCount
+    j.transfers.length !== j.transferCount ||
+    j.legs[0].continuation
   )
     errors.push("乗換数違反");
+  const connections = q.formationContinuations
+    ? throughConnections(index)
+    : undefined;
+  let transferIndex = 0;
+  let priorTrip: Trip | undefined;
   j.legs.forEach((leg, i) => {
     const trip = index.trips.get(
       tripKey(leg.datasetId, leg.timetableId, leg.trainId),
     );
     const a = trip?.visits[leg.boardIndex],
       b = trip?.visits[leg.alightIndex];
+    const boundaryStart = i === 0 && q.boundaryOriginTrains;
+    const boundaryEnd = i === j.legs.length - 1 && q.boundaryDestinationTrains;
+    const sameVehicle = leg.continuation !== undefined;
+    const continues = j.legs[i + 1]?.continuation !== undefined;
     if (
       !trip ||
       !a ||
       !b ||
       leg.alightIndex <= leg.boardIndex ||
-      !canBoard(a) ||
-      !canAlight(b) ||
-      leg.departure !== a.departure ||
-      leg.arrival !== b.arrival ||
+      (boundaryStart
+        ? !boundaryStart.includes(leg.trainId) ||
+          leg.boardIndex !== 0 ||
+          leg.departure !== (a.departure ?? a.arrival)
+        : (!sameVehicle && !canBoard(a)) || leg.departure !== a.departure) ||
+      (boundaryEnd
+        ? !boundaryEnd.includes(leg.trainId) ||
+          leg.alightIndex !== trip.visits.length - 1 ||
+          leg.arrival !== (b.arrival ?? b.departure)
+        : (!continues && !canAlight(b)) || leg.arrival !== b.arrival) ||
       leg.origin.stationId !== a.stationId ||
       leg.destination.stationId !== b.stationId ||
       leg.origin.datasetId !== leg.datasetId ||
@@ -717,9 +910,39 @@ export function validateJourney(
         JSON.stringify(trip.visits.slice(leg.boardIndex, leg.alightIndex + 1))
     )
       errors.push(`区間${i + 1}の途中駅情報不一致`);
+    if (positions && trip && a && b) {
+      for (let stop = leg.boardIndex; stop <= leg.alightIndex; stop++) {
+        const next = positions.get(trip.stationKeys[stop]);
+        if (
+          next === undefined ||
+          next < position ||
+          (next === position && stop > leg.boardIndex)
+        ) {
+          errors.push(`区間${i + 1}は指定経路外または折り返し`);
+          break;
+        }
+        position = next;
+      }
+    }
     if (i > 0) {
       const previous = j.legs[i - 1],
-        t = j.transfers[i - 1];
+        t = sameVehicle ? undefined : j.transfers[transferIndex++];
+      if (sameVehicle) {
+        const links =
+          priorTrip && connections?.get(priorTrip)?.get(previous.alightIndex);
+        if (
+          leg.departure < previous.arrival ||
+          !links?.some(
+            (link) =>
+              link.to === trip &&
+              link.index === leg.boardIndex &&
+              link.kind === leg.continuation,
+          )
+        )
+          errors.push(`区間${i + 1}の併結・解結接続不正`);
+        priorTrip = trip;
+        return;
+      }
       const walk = index.walks
         .get(stationKey(previous.destination))
         ?.find((w) => stationKey(w.to) === stationKey(leg.origin));
@@ -740,11 +963,18 @@ export function validateJourney(
       )
         errors.push(`乗換${i}の時刻・徒歩連絡不正`);
     }
+    priorTrip = trip;
   });
   if (
     j.elapsedSeconds !== j.arrival - j.departure ||
     j.ridingSeconds !==
-      j.legs.reduce((s, l) => s + l.arrival - l.departure, 0) ||
+      j.legs.reduce(
+        (s, l, i) =>
+          s +
+          l.arrival -
+          (l.continuation && i > 0 ? j.legs[i - 1].arrival : l.departure),
+        0,
+      ) ||
     j.transferWaitSeconds !==
       j.transfers.reduce((s, t) => s + t.waitingSeconds, 0) ||
     j.walkingSeconds !==
